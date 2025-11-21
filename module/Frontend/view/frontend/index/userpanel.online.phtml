@@ -1,3 +1,19 @@
+<?php
+// Compute date used for "notify me" button
+$interestDate = null;
+
+if (isset($this->dateNow) && $this->dateNow instanceof \DateTimeInterface) {
+    $interestDate = $this->dateNow->format('Y-m-d');
+} elseif (isset($this->dateNow) && !empty($this->dateNow)) {
+    try {
+        $dt           = new \DateTime($this->dateNow);
+        $interestDate = $dt->format('Y-m-d');
+    } catch (\Exception $e) {
+        $interestDate = null;
+    }
+}
+?>
+
 <table style="height: 100%;">
     <tr>
         <td class="responsive-pass-4" style="padding-right: 12px; border-right: solid 1px #CCC;">
@@ -13,7 +29,9 @@
             <?php $this->headScript()->appendFile($this->basePath('js/controller/frontend/index.admin.min.js')) ?>
 
             <td class="responsive-pass-4" style="padding-right: 12px; border-right: solid 1px #CCC;">
-                <a href="<?= $this->url('backend') ?>" id="admin-menu-link" class="default-button"><span class="symbolic symbolic-config"><?= $this->t('Administration') ?></span></a>
+                <a href="<?= $this->url('backend') ?>" id="admin-menu-link" class="default-button">
+                    <span class="symbolic symbolic-config"><?= $this->t('Administration') ?></span>
+                </a>
             </td>
 
             <td class="responsive-pass-4" style="padding-right: 12px;"></td>
@@ -21,19 +39,84 @@
         <?php endif; ?>
 
         <td>
-            <a href="<?= $this->url('user/bookings') ?>" class="default-button" data-tooltip="<?= $this->userLastBookings($this->user) ?>"><span class="symbolic symbolic-booking"><?= $this->t('My bookings') ?></span></a>
+            <a href="<?= $this->url('user/bookings') ?>"
+               class="default-button"
+               data-tooltip="<?= $this->userLastBookings($this->user) ?>">
+                <span class="symbolic symbolic-booking"><?= $this->t('My bookings') ?></span>
+            </a>
         </td>
 
+        <?php if ($this->zfcUserIdentity() && $interestDate): ?>
+            <!-- Notify-me button, next to "My bookings" -->
+            <td>
+                <button id="notify-day-btn"
+                        type="button"
+                        class="default-button"
+                        data-date="<?= $this->escapeHtmlAttr($interestDate) ?>">
+                    <span class="symbolic symbolic-booking">
+                        <?= $this->t('Notify me if a slot opens') ?>
+                    </span>
+                </button>
+            </td>
+        <?php endif; ?>
+
         <td>
-            <a href="<?= $this->url('user/settings') ?>" class="default-button"><span class="symbolic symbolic-user"><?= $this->t('My account') ?></span></a>
+            <a href="<?= $this->url('user/settings') ?>" class="default-button">
+                <span class="symbolic symbolic-user"><?= $this->t('My account') ?></span>
+            </a>
         </td>
 
         <td style="padding-right: 12px;">
-            <a href="<?= $this->url('user/logout') ?>" class="default-button"><span class="symbolic symbolic-off"><?= $this->t('Logout') ?></span></a>
+            <a href="<?= $this->url('user/logout') ?>" class="default-button">
+                <span class="symbolic symbolic-off"><?= $this->t('Logout') ?></span>
+            </a>
         </td>
 
         <td style="padding-left: 12px; border-left: solid 1px #CCC;">
-            <a href="<?= $this->url('service/help') ?>" class="default-button" data-tooltip="<?= sprintf($this->t('Get additional %shelp and information%s'), '<b>', '</b>') ?>"><b>?</b></a>
+            <a href="<?= $this->url('service/help') ?>" class="default-button"
+               data-tooltip="<?= sprintf($this->t('Get additional %shelp and information%s'), '<b>', '</b>') ?>">
+                <b>?</b>
+            </a>
         </td>
     </tr>
 </table>
+
+<?php if ($this->zfcUserIdentity() && $interestDate): ?>
+    <script>
+    (function () {
+        var btn = document.getElementById('notify-day-btn');
+        if (!btn) { return; }
+
+        btn.addEventListener('click', function () {
+            var date = this.getAttribute('data-date');
+            var formData = new FormData();
+            formData.append('date', date);
+
+            fetch('/interest/register', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                body: formData
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (j.ok) {
+                    alert(
+                        'Your interest for ' + date +
+                        ' has been registered.\n\n' +
+                        'If a booking on this day is cancelled, you will receive a notification ' +
+                        'using your configured methods (email and/or WhatsApp, as set in My account).'
+                    );
+                } else if (j.error === 'AUTH_REQUIRED') {
+                    alert('Please sign in first.');
+                } else {
+                    alert('Could not register your interest: ' + j.error);
+                }
+            })
+            .catch(function () {
+                alert('Network error.');
+            });
+        });
+    })();
+    </script>
+<?php endif; ?>
