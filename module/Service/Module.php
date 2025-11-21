@@ -30,8 +30,34 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
     {
         return array(
             'factories' => array(
-                \Service\Service\WhatsAppService::class        => \Service\Factory\WhatsAppServiceFactory::class,
-                \Service\Service\BookingInterestService::class => \Service\Factory\BookingInterestServiceFactory::class,
+
+                // WhatsApp service (we added this earlier)
+                \Service\Service\WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
+
+                // Booking-interest service – **pass all 4 constructor arguments**
+                \Service\Service\BookingInterestService::class => function ($serviceManager) {
+
+                    // Database adapter
+                    $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
+
+                    // Mail transport – ep3-bs already registers this service
+                    // (Sendmail / SMTP depending on your config)
+                    $mailTransport = $serviceManager->get('mail.transport');
+
+                    // Mail configuration (from global/local config)
+                    $config    = $serviceManager->get('Config');
+                    $mailConfig = isset($config['mail']) ? $config['mail'] : array();
+
+                    // Our WhatsApp wrapper
+                    $whatsApp = $serviceManager->get(\Service\Service\WhatsAppService::class);
+
+                    return new \Service\Service\BookingInterestService(
+                        $dbAdapter,
+                        $mailTransport,
+                        $mailConfig,
+                        $whatsApp
+                    );
+                },
             ),
         );
     }
@@ -50,7 +76,8 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         if ($optionManager->get('service.maintenance', 'false') == 'true') {
             $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
 
-            // If any non admin user is currently online, kick him off.
+            /* If any non admin user is currently online, kick him off. */
+
             $user = $userSessionManager->getSessionUser();
 
             if ($user) {
@@ -61,13 +88,13 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                 $userSessionManager->logout();
             }
 
-            // Redirect all routes except login to the system status page.
+            /* Redirect all routes except login to the system status page. */
+
             $routeMatch = $e->getRouteMatch();
 
-            if (!(
-                $routeMatch->getParam('controller') == 'User\Controller\Session'
-                && $routeMatch->getParam('action') == 'login'
-            )) {
+            if (!($routeMatch->getParam('controller') == 'User\Controller\Session'
+                && $routeMatch->getParam('action') == 'login')
+            ) {
                 $routeMatch->setParam('controller', 'Service\Controller\Service');
                 $routeMatch->setParam('action', 'status');
             }
