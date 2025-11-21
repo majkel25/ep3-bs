@@ -2,7 +2,11 @@
 
 namespace Service;
 
+use Service\Service\BookingInterestService;
+use Service\Service\WhatsAppService;
 use Zend\EventManager\EventInterface;
+use Zend\Mail\Transport\Null as NullTransport;
+use Zend\Mail\Transport\TransportInterface;
 use Zend\ModuleManager\Feature\AutoloaderProviderInterface;
 use Zend\ModuleManager\Feature\BootstrapListenerInterface;
 use Zend\ModuleManager\Feature\ConfigProviderInterface;
@@ -31,30 +35,35 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         return array(
             'factories' => array(
 
-                // WhatsApp service (we added this earlier)
-                \Service\Service\WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
+                // Existing WhatsApp service factory
+                WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
-                // Booking-interest service – **pass all 4 constructor arguments**
-                \Service\Service\BookingInterestService::class => function ($serviceManager) {
+                // Booking-interest service factory
+                BookingInterestService::class => function ($serviceManager) {
 
-                    // Database adapter
+                    // DB adapter (standard ep3-bs service)
                     $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
 
-                    // Mail transport – ep3-bs already registers this service
-                    // (Sendmail / SMTP depending on your config)
-                    $mailTransport = $serviceManager->get('mail.transport');
+                    // App config (for mail settings like address, etc.)
+                    $config  = $serviceManager->get('Config');
+                    $mailCfg = isset($config['mail']) ? $config['mail'] : array();
 
-                    // Mail configuration (from global/local config)
-                    $config    = $serviceManager->get('Config');
-                    $mailConfig = isset($config['mail']) ? $config['mail'] : array();
+                    /** @var TransportInterface $mailTransport */
+                    if ($serviceManager->has('mail.transport')) {
+                        // Use the SAME transport as the existing booking emails
+                        $mailTransport = $serviceManager->get('mail.transport');
+                    } else {
+                        // Safe fallback (no-op, but avoids 500s in misconfigured envs)
+                        $mailTransport = new NullTransport();
+                    }
 
-                    // Our WhatsApp wrapper
-                    $whatsApp = $serviceManager->get(\Service\Service\WhatsAppService::class);
+                    // WhatsApp wrapper
+                    $whatsApp = $serviceManager->get(WhatsAppService::class);
 
-                    return new \Service\Service\BookingInterestService(
+                    return new BookingInterestService(
                         $dbAdapter,
                         $mailTransport,
-                        $mailConfig,
+                        $mailCfg,
                         $whatsApp
                     );
                 },
@@ -76,8 +85,6 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         if ($optionManager->get('service.maintenance', 'false') == 'true') {
             $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
 
-            /* If any non admin user is currently online, kick him off. */
-
             $user = $userSessionManager->getSessionUser();
 
             if ($user) {
@@ -87,8 +94,6 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
 
                 $userSessionManager->logout();
             }
-
-            /* Redirect all routes except login to the system status page. */
 
             $routeMatch = $e->getRouteMatch();
 
