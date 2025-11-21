@@ -5,8 +5,9 @@ namespace Service;
 use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
 use Zend\EventManager\EventInterface;
-use Zend\Mail\Transport\Null as NullTransport;
-use Zend\Mail\Transport\TransportInterface;
+use Zend\Mail\Transport\Sendmail;
+use Zend\Mail\Transport\Smtp;
+use Zend\Mail\Transport\SmtpOptions;
 use Zend\ModuleManager\Feature\AutoloaderProviderInterface;
 use Zend\ModuleManager\Feature\BootstrapListenerInterface;
 use Zend\ModuleManager\Feature\ConfigProviderInterface;
@@ -35,29 +36,59 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         return array(
             'factories' => array(
 
-                // Existing WhatsApp service factory
+                // Already existing WhatsApp service
                 WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
-                // Booking-interest service factory
+                // Booking-interest service – build our own mail transport
                 BookingInterestService::class => function ($serviceManager) {
 
-                    // DB adapter (standard ep3-bs service)
+                    // Database adapter
                     $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
 
-                    // App config (for mail settings like address, etc.)
+                    // Mail configuration (from global + local config)
                     $config  = $serviceManager->get('Config');
                     $mailCfg = isset($config['mail']) ? $config['mail'] : array();
 
-                    /** @var TransportInterface $mailTransport */
-                    if ($serviceManager->has('mail.transport')) {
-                        // Use the SAME transport as the existing booking emails
-                        $mailTransport = $serviceManager->get('mail.transport');
-                    } else {
-                        // Safe fallback (no-op, but avoids 500s in misconfigured envs)
-                        $mailTransport = new NullTransport();
-                    }
+                    // ---- build the mail transport from $mailCfg ----
+                    $type = isset($mailCfg['type']) ? strtolower($mailCfg['type']) : 'sendmail';
 
-                    // WhatsApp wrapper
+                    if ($type === 'smtp' || $type === 'smtp-tls') {
+
+                        $host = isset($mailCfg['host']) ? $mailCfg['host'] : 'localhost';
+                        $port = isset($mailCfg['port']) ? (int)$mailCfg['port'] : 25;
+
+                        $optionsArray = array(
+                            'name' => $host,
+                            'host' => $host,
+                            'port' => $port,
+                        );
+
+                        // Authentication config
+                        if (!empty($mailCfg['user'])) {
+                            $optionsArray['connection_class'] = !empty($mailCfg['auth']) ? $mailCfg['auth'] : 'login';
+
+                            $connCfg = array(
+                                'username' => $mailCfg['user'],
+                                'password' => isset($mailCfg['pw']) ? $mailCfg['pw'] : '',
+                            );
+
+                            if ($type === 'smtp-tls') {
+                                $connCfg['ssl'] = 'tls';
+                            }
+
+                            $optionsArray['connection_config'] = $connCfg;
+                        }
+
+                        $options       = new SmtpOptions($optionsArray);
+                        $mailTransport = new Smtp($options);
+
+                    } else {
+                        // Default: use Sendmail, which is what ep3-bs uses by default
+                        $mailTransport = new Sendmail();
+                    }
+                    // ---- end mail transport build ----
+
+                    // WhatsApp service
                     $whatsApp = $serviceManager->get(WhatsAppService::class);
 
                     return new BookingInterestService(
