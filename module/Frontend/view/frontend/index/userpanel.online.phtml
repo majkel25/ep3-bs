@@ -98,8 +98,25 @@ if (isset($this->dateNow) && $this->dateNow instanceof \DateTimeInterface) {
                 headers: { 'X-Requested-With': 'XMLHttpRequest' },
                 body: formData
             })
-            .then(function (r) { return r.json(); })
-            .then(function (j) {
+            .then(function (r) {
+                // Read raw text first so we can see real errors
+                return r.text().then(function (text) {
+                    return { ok: r.ok, status: r.status, text: text };
+                });
+            })
+            .then(function (res) {
+                var j;
+                try {
+                    j = JSON.parse(res.text);
+                } catch (e) {
+                    // Not JSON – show first part of the response so we can debug
+                    alert(
+                        'Server returned a non-JSON response (status ' + res.status + ').\n\n' +
+                        res.text.substring(0, 400)
+                    );
+                    return;
+                }
+
                 if (j.ok) {
                     alert(
                         'Your interest for ' + date +
@@ -111,8 +128,8 @@ if (isset($this->dateNow) && $this->dateNow instanceof \DateTimeInterface) {
                     alert('Could not register your interest: ' + j.error);
                 }
             })
-            .catch(function () {
-                alert('Network error.');
+            .catch(function (err) {
+                alert('Network / JS error: ' + err);
             });
         });
     })();
