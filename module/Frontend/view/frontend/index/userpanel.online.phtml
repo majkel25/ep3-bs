@@ -46,7 +46,7 @@ if (isset($this->dateNow) && $this->dateNow instanceof \DateTimeInterface) {
             </a>
         </td>
 
-        <?php if ($this->zfcUserIdentity() && $interestDate): ?>
+        <?php if ($this->user && $interestDate): ?>
             <!-- Notify-me button, next to "My bookings" -->
             <td>
                 <button id="notify-day-btn"
@@ -81,7 +81,7 @@ if (isset($this->dateNow) && $this->dateNow instanceof \DateTimeInterface) {
     </tr>
 </table>
 
-<?php if ($this->zfcUserIdentity() && $interestDate): ?>
+<?php if ($this->user && $interestDate): ?>
     <script>
     (function () {
         var btn = document.getElementById('notify-day-btn');
@@ -107,8 +107,6 @@ if (isset($this->dateNow) && $this->dateNow instanceof \DateTimeInterface) {
                         'If a booking on this day is cancelled, you will receive a notification ' +
                         'using your configured methods (email and/or WhatsApp, as set in My account).'
                     );
-                } else if (j.error === 'AUTH_REQUIRED') {
-                    alert('Please sign in first.');
                 } else {
                     alert('Could not register your interest: ' + j.error);
                 }
