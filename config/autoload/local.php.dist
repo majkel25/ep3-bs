@@ -7,6 +7,10 @@
  */
 
 return array(
+    'view_manager' => [
+    'display_exceptions' => true,
+                        ],
+    
     'db' => array(
         'database' => '?',
         'username' => '?',
