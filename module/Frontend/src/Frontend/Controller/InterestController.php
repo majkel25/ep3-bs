@@ -20,20 +20,23 @@ class InterestController extends AbstractActionController
                 ));
             }
 
-            // Make sure the PHP session behind ep3-bs-session cookie is started
+            // Do NOT start a new session with default name; assume ep3-bs already did it.
+            // But if for some reason it's not started yet, start it without changing the name.
             if (session_status() === PHP_SESSION_NONE) {
                 session_start();
             }
 
-            // Get logged-in user via UserSessionManager (the way ep3-bs normally does it)
             $serviceManager     = $this->getServiceLocator();
             $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
             $user               = $userSessionManager->getSessionUser();
 
             if (! $user) {
+                // DEBUG: show what PHP thinks the session & cookies are
                 return new JsonModel(array(
-                    'ok'    => false,
-                    'error' => 'AUTH_REQUIRED',
+                    'ok'        => false,
+                    'error'     => 'AUTH_REQUIRED',
+                    'session'   => $_SESSION,
+                    'cookies'   => $_COOKIE,
                 ));
             }
 
@@ -67,7 +70,7 @@ class InterestController extends AbstractActionController
                 'ok' => true,
             ));
         } catch (\Throwable $e) {
-            // TEMPORARY DEBUG OUTPUT – will make HTTP 200 with JSON error instead of 500
+            // TEMPORARY: expose the exception so we can see what's going on
             return new JsonModel(array(
                 'ok'      => false,
                 'error'   => 'EXCEPTION',
