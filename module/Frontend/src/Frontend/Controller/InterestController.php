@@ -19,15 +19,13 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        // Get service manager
-        $serviceManager = $this->getServiceLocator();
-
-        // *** IMPORTANT: explicitly start the Zend session ***
-        // This makes sure the session behind the ep3-bs-session cookie is loaded.
-        $sessionManager = $serviceManager->get('Zend\Session\SessionManager');
-        $sessionManager->start();
+        // Make sure the PHP session behind ep3-bs-session cookie is started
+        if (session_status() === PHP_SESSION_NONE) {
+            session_start();
+        }
 
         // Get logged-in user via UserSessionManager (the way ep3-bs normally does it)
+        $serviceManager     = $this->getServiceLocator();
         $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
         $user               = $userSessionManager->getSessionUser();
 
@@ -65,7 +63,6 @@ class InterestController extends AbstractActionController
         try {
             $svc->registerInterest($userId, $date);
         } catch (\Exception $e) {
-            // If something goes wrong in the service, respond with a generic error
             return new JsonModel(array(
                 'ok'    => false,
                 'error' => 'SERVER_ERROR',
