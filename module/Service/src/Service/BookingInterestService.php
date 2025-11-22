@@ -62,7 +62,7 @@ class BookingInterestService
      */
     public function registerInterest($userId, \DateTimeInterface $date)
     {
-        $userId = (int)$userId;
+        $userId = (int) $userId;
         $d      = $date->format('Y-m-d');
 
         try {
@@ -108,7 +108,7 @@ class BookingInterestService
 
         $userIds = array();
         foreach ($rows as $row) {
-            $userIds[] = (int)$row['user_id'];
+            $userIds[] = (int) $row['user_id'];
         }
         $userIds = array_values(array_unique($userIds));
 
@@ -135,7 +135,7 @@ class BookingInterestService
                 }
             }
 
-            // WhatsApp
+            // WhatsApp – do not break if service is missing
             if ($this->whatsApp
                 && !empty($contact['notify_cancel_whatsapp'])
                 && !empty($contact['phone'])
@@ -149,7 +149,7 @@ class BookingInterestService
         foreach ($rows as $row) {
             $this->tg->update(
                 array('notified_at' => $now),
-                array('id' => (int)$row['id'])
+                array('id' => (int) $row['id'])
             );
         }
     }
@@ -177,13 +177,13 @@ class BookingInterestService
 
         $map = array();
         foreach ($result as $row) {
-            $uid = (int)$row['uid'];
+            $uid = (int) $row['uid'];
 
             $map[$uid] = array(
                 'email'                  => $row['email'],
                 'phone'                  => $row['phone'],
-                'notify_cancel_email'    => isset($row['notify_cancel_email']) ? (int)$row['notify_cancel_email'] : 0,
-                'notify_cancel_whatsapp' => isset($row['notify_cancel_whatsapp']) ? (int)$row['notify_cancel_whatsapp'] : 0,
+                'notify_cancel_email'    => isset($row['notify_cancel_email']) ? (int) $row['notify_cancel_email'] : 0,
+                'notify_cancel_whatsapp' => isset($row['notify_cancel_whatsapp']) ? (int) $row['notify_cancel_whatsapp'] : 0,
             );
         }
 
@@ -243,53 +243,4 @@ class BookingInterestService
         $when   = $this->formatSlot($booking);
 
         $text  = "Booking alert \xF0\x9F\x94\x94\n"; // 🔔
-        $text .= "A booking on {$square} for {$when} was cancelled.\n\n";
-        $text .= "There may be a free slot now – open the booking system and try to reserve it.";
-
-        return $text;
-    }
-
-    /**
-     * @param array $booking
-     * @return string
-     */
-    protected function formatSlot(array $booking)
-    {
-        $start = isset($booking['start']) ? $booking['start'] : null;
-        $end   = isset($booking['end']) ? $booking['end'] : null;
-
-        if (!$start) {
-            return 'selected time';
-        }
-
-        if ($start instanceof \DateTimeInterface) {
-            $s = $start;
-        } else {
-            $s = new \DateTime($start);
-        }
-
-        if ($end) {
-            if ($end instanceof \DateTimeInterface) {
-                $e = $end;
-            } else {
-                $e = new \DateTime($end);
-            }
-            return $s->format('Y-m-d H:i') . ' – ' . $e->format('H:i');
-        }
-
-        return $s->format('Y-m-d');
-    }
-
-    /**
-     * Optional housekeeping: remove old/used interests.
-     *
-     * @param int $days Age in days
-     * @return int rows deleted
-     */
-    public function cleanupOldInterests($days = 30)
-    {
-        $cutoff = (new \DateTime("-{$days} days"))->format('Y-m-d');
-
-        return $this->tg->delete("interest_date < '{$cutoff}' OR notified_at IS NOT NULL");
-    }
-}
+        $text .= "A bo

@@ -32,87 +32,86 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
     }
 
     public function getServiceConfig()
-    {
-        return array(
-            'factories' => array(
+{
+    return array(
+        'factories' => array(
 
-                // Already existing WhatsApp service
-                WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
+            // Existing WhatsApp service
+            WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
-                // Booking-interest service – build our own mail transport
-                BookingInterestService::class => function ($serviceManager) {
+            // Booking-interest service – build our own mail transport
+            BookingInterestService::class => function ($serviceManager) {
 
-                    // Database adapter
-                    $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
+                // Database adapter
+                $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
 
-                    // Mail configuration (from global + local config)
-                    $config  = $serviceManager->get('Config');
-                    $mailCfg = isset($config['mail']) ? $config['mail'] : array();
+                // Mail configuration (from global + local config)
+                $config  = $serviceManager->get('Config');
+                $mailCfg = isset($config['mail']) ? $config['mail'] : array();
 
-                    // ---- build the mail transport from $mailCfg ----
-                    $type = isset($mailCfg['type']) ? strtolower($mailCfg['type']) : 'sendmail';
+                // ---- build the mail transport from $mailCfg ----
+                $type = isset($mailCfg['type']) ? strtolower($mailCfg['type']) : 'sendmail';
 
-                    if ($type === 'smtp' || $type === 'smtp-tls') {
+                if ($type === 'smtp' || $type === 'smtp-tls') {
 
-                        $host = isset($mailCfg['host']) ? $mailCfg['host'] : 'localhost';
-                        $port = isset($mailCfg['port']) ? (int)$mailCfg['port'] : 25;
+                    $host = isset($mailCfg['host']) ? $mailCfg['host'] : 'localhost';
+                    $port = isset($mailCfg['port']) ? (int) $mailCfg['port'] : 25;
 
-                        $optionsArray = array(
-                            'name' => $host,
-                            'host' => $host,
-                            'port' => $port,
+                    $optionsArray = array(
+                        'name' => $host,
+                        'host' => $host,
+                        'port' => $port,
+                    );
+
+                    // Authentication config
+                    if (!empty($mailCfg['user'])) {
+                        $optionsArray['connection_class'] = !empty($mailCfg['auth']) ? $mailCfg['auth'] : 'login';
+
+                        $connCfg = array(
+                            'username' => $mailCfg['user'],
+                            'password' => isset($mailCfg['pw']) ? $mailCfg['pw'] : '',
                         );
 
-                        // Authentication config
-                        if (!empty($mailCfg['user'])) {
-                            $optionsArray['connection_class'] = !empty($mailCfg['auth']) ? $mailCfg['auth'] : 'login';
-
-                            $connCfg = array(
-                                'username' => $mailCfg['user'],
-                                'password' => isset($mailCfg['pw']) ? $mailCfg['pw'] : '',
-                            );
-
-                            if ($type === 'smtp-tls') {
-                                $connCfg['ssl'] = 'tls';
-                            }
-
-                            $optionsArray['connection_config'] = $connCfg;
+                        if ($type === 'smtp-tls') {
+                            $connCfg['ssl'] = 'tls';
                         }
 
-                        $options       = new SmtpOptions($optionsArray);
-                        $mailTransport = new Smtp($options);
-
-                    } else {
-                        // Default: use Sendmail, which is what ep3-bs uses by default
-                        $mailTransport = new Sendmail();
+                        $optionsArray['connection_config'] = $connCfg;
                     }
-                    // ---- end mail transport build ----
 
-                    // WhatsApp service (optional – do not break if it fails)
-                    $whatsApp = null;
+                    $options       = new SmtpOptions($optionsArray);
+                    $mailTransport = new Smtp($options);
 
-                    if ($serviceManager->has(WhatsAppService::class)) {
-                        try {
-                            $whatsApp = $serviceManager->get(WhatsAppService::class);
-                        } catch (\Throwable $e) {
-                            // Optional: log or ignore – we just skip WhatsApp notifications
-                            // error_log('WhatsAppService creation failed: ' . $e->getMessage());
-                            $whatsApp = null;
-                        }
+                } else {
+                    // Default: use Sendmail, which is what ep3-bs uses by default
+                    $mailTransport = new Sendmail();
+                }
+                // ---- end mail transport build ----
+
+                // WhatsApp service is optional – do not fail if it cannot be created
+                $whatsApp = null;
+
+                if ($serviceManager->has(WhatsAppService::class)) {
+                    try {
+                        $whatsApp = $serviceManager->get(WhatsAppService::class);
+                    } catch (\Throwable $e) {
+                        // Optional: log, but do not block interest service
+                        // error_log('WhatsAppService creation failed: ' . $e->getMessage());
+                        $whatsApp = null;
                     }
-                    // TESTIG Deployment
+                }
 
+                return new BookingInterestService(
+                    $dbAdapter,
+                    $mailTransport,
+                    $mailCfg,
+                    $whatsApp
+                );
+            },
+        ),
+    );
+}
 
-                    return new BookingInterestService(
-                        $dbAdapter,
-                        $mailTransport,
-                        $mailCfg,
-                        $whatsApp
-                    );
-                },
-            ),
-        );
-    }
 
     public function onBootstrap(EventInterface $e)
     {
