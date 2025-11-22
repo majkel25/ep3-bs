@@ -100,6 +100,8 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                             $whatsApp = null;
                         }
                     }
+                    // TESTIG Deployment
+
 
                     return new BookingInterestService(
                         $dbAdapter,
