@@ -88,8 +88,18 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                     }
                     // ---- end mail transport build ----
 
-                    // WhatsApp service
-                    $whatsApp = $serviceManager->get(WhatsAppService::class);
+                    // WhatsApp service (optional – do not break if it fails)
+                    $whatsApp = null;
+
+                    if ($serviceManager->has(WhatsAppService::class)) {
+                        try {
+                            $whatsApp = $serviceManager->get(WhatsAppService::class);
+                        } catch (\Throwable $e) {
+                            // Optional: log or ignore – we just skip WhatsApp notifications
+                            // error_log('WhatsAppService creation failed: ' . $e->getMessage());
+                            $whatsApp = null;
+                        }
+                    }
 
                     return new BookingInterestService(
                         $dbAdapter,

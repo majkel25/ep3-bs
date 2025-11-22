@@ -32,7 +32,7 @@ class BookingInterestService
     protected $mailCfg;
 
     /**
-     * @var WhatsAppService
+     * @var mixed|null WhatsAppService instance or null if unavailable
      */
     protected $whatsApp;
 
@@ -40,13 +40,13 @@ class BookingInterestService
      * @param Adapter            $db
      * @param TransportInterface $mail
      * @param array              $mailCfg
-     * @param WhatsAppService    $whatsApp
+     * @param mixed              $whatsApp  WhatsAppService|null
      */
     public function __construct(
         Adapter $db,
         TransportInterface $mail,
         array $mailCfg,
-        WhatsAppService $whatsApp
+        $whatsApp = null
     ) {
         $this->tg       = new TableGateway('bs_booking_interest', $db);
         $this->mail     = $mail;
@@ -136,7 +136,10 @@ class BookingInterestService
             }
 
             // WhatsApp
-            if (!empty($contact['notify_cancel_whatsapp']) && !empty($contact['phone'])) {
+            if ($this->whatsApp
+                && !empty($contact['notify_cancel_whatsapp'])
+                && !empty($contact['phone'])
+            ) {
                 $this->whatsApp->sendToNumber($contact['phone'], $waUserText);
             }
         }
