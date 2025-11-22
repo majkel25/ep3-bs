@@ -26,6 +26,7 @@ class InterestController extends AbstractActionController
                 session_start();
             }
 
+
             $serviceManager     = $this->getServiceLocator();
             $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
             $user               = $userSessionManager->getSessionUser();
@@ -80,3 +81,4 @@ class InterestController extends AbstractActionController
         }
     }
 }
+// testing 2
