@@ -1,13 +1,9 @@
 <?php
-
 namespace Service;
 
 use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
 use Zend\EventManager\EventInterface;
-use Zend\Mail\Transport\Sendmail;
-use Zend\Mail\Transport\Smtp;
-use Zend\Mail\Transport\SmtpOptions;
 use Zend\ModuleManager\Feature\AutoloaderProviderInterface;
 use Zend\ModuleManager\Feature\BootstrapListenerInterface;
 use Zend\ModuleManager\Feature\ConfigProviderInterface;
@@ -31,29 +27,19 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         return include __DIR__ . '/config/module.config.php';
     }
 
-    public function getServiceConfig()public function getServiceConfig()
-{
-    return array(
-        'factories' => array(
+    public function getServiceConfig()
+    {
+        return array(
+            'factories' => array(
 
-            // WhatsApp service
-            WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
+                // WhatsApp service (leave as before)
+                WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
-            // Booking-interest service – CURRENTLY a closure
-            BookingInterestService::class => function ($serviceManager) {
-                // … builds mail transport …
-                // … reads config …
-                // … gets WhatsAppService::class …
-                return new BookingInterestService(
-                    $dbAdapter,
-                    $mailTransport,
-                    $mailCfg,
-                    $whatsApp
-                );
-            },
-        ),
-    );
-}
+                // Booking-interest service: use our dedicated factory class
+                BookingInterestService::class => \Service\Factory\BookingInterestServiceFactory::class,
+            ),
+        );
+    }
 
     public function onBootstrap(EventInterface $e)
     {
