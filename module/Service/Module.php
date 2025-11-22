@@ -27,16 +27,12 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         return include __DIR__ . '/config/module.config.php';
     }
 
-    public function getServiceConfig()
+   public function getServiceConfig()
     {
         return array(
             'factories' => array(
-
-                // WhatsApp service (leave as before)
-                WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
-
-                // Booking-interest service: use our dedicated factory class
-                BookingInterestService::class => \Service\Factory\BookingInterestServiceFactory::class,
+                // WhatsApp service only
+                \Service\Service\WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
             ),
         );
     }

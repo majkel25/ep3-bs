@@ -4,7 +4,13 @@ namespace Frontend\Controller;
 
 use Zend\Mvc\Controller\AbstractActionController;
 use Zend\View\Model\JsonModel;
+
 use Service\Service\BookingInterestService;
+use Service\Service\WhatsAppService;
+
+use Zend\Mail\Transport\Sendmail;
+use Zend\Mail\Transport\Smtp;
+use Zend\Mail\Transport\SmtpOptions;
 
 class InterestController extends AbstractActionController
 {
@@ -19,20 +25,18 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        // --- make sure we are attached to the SAME session as ep3-bs uses ---
+        // ------------------------------------------------------------------
+        // Attach to SAME PHP session as ep3-bs
+        // ------------------------------------------------------------------
         $serviceManager = $this->getServiceLocator();
         $config         = $serviceManager->get('Config');
 
-        $sessionName = null;
         if (isset($config['session']['config']['name'])
             && is_string($config['session']['config']['name'])
             && $config['session']['config']['name'] !== ''
         ) {
             $sessionName = $config['session']['config']['name'];
-        }
 
-        if ($sessionName !== null) {
-            // If PHP is using a different session name, switch to the ep3 one
             if (session_name() !== $sessionName) {
                 if (session_status() === PHP_SESSION_ACTIVE) {
                     session_write_close();
@@ -44,9 +48,10 @@ class InterestController extends AbstractActionController
         if (session_status() !== PHP_SESSION_ACTIVE) {
             @session_start();
         }
-        // --- end session attach ---
 
-        // Get logged-in user via UserSessionManager (standard ep3-bs way)
+        // ------------------------------------------------------------------
+        // Logged-in user via UserSessionManager
+        // ------------------------------------------------------------------
         $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
         $user               = $userSessionManager->getSessionUser();
 
@@ -78,11 +83,77 @@ class InterestController extends AbstractActionController
         // ep3-bs user entities normally store primary key as "uid"
         $userId = (int) $user->need('uid');
 
-        /** @var BookingInterestService $svc */
-        $svc = $serviceManager->get(BookingInterestService::class);
+        // ------------------------------------------------------------------
+        // Manually build BookingInterestService (NO ServiceManager get())
+        // ------------------------------------------------------------------
 
+        // DB adapter
+        $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
+
+        // Mail configuration
+        $mailCfg = isset($config['mail']) ? $config['mail'] : array();
+
+        // Build mail transport (Sendmail / SMTP / SMTP-TLS)
+        $type = isset($mailCfg['type']) ? strtolower($mailCfg['type']) : 'sendmail';
+
+        if ($type === 'smtp' || $type === 'smtp-tls') {
+
+            $host = isset($mailCfg['host']) ? $mailCfg['host'] : 'localhost';
+            $port = isset($mailCfg['port']) ? (int)$mailCfg['port'] : 25;
+
+            $optionsArray = array(
+                'name' => $host,
+                'host' => $host,
+                'port' => $port,
+            );
+
+            if (!empty($mailCfg['user'])) {
+                $optionsArray['connection_class'] =
+                    !empty($mailCfg['auth']) ? $mailCfg['auth'] : 'login';
+
+                $connCfg = array(
+                    'username' => $mailCfg['user'],
+                    'password' => isset($mailCfg['pw']) ? $mailCfg['pw'] : '',
+                );
+
+                if ($type === 'smtp-tls') {
+                    $connCfg['ssl'] = 'tls';
+                }
+
+                $optionsArray['connection_config'] = $connCfg;
+            }
+
+            $options       = new SmtpOptions($optionsArray);
+            $mailTransport = new Smtp($options);
+
+        } else {
+            // Default: Sendmail
+            $mailTransport = new Sendmail();
+        }
+
+        // WhatsApp service is optional; if it fails, we just continue without it
+        $whatsApp = null;
+        if ($serviceManager->has(WhatsAppService::class)) {
+            try {
+                $whatsApp = $serviceManager->get(WhatsAppService::class);
+            } catch (\Exception $e) {
+                $whatsApp = null;
+            }
+        }
+
+        // Create the service DIRECTLY (no ServiceManager call)
+        $bookingInterestService = new BookingInterestService(
+            $dbAdapter,
+            $mailTransport,
+            $mailCfg,
+            $whatsApp
+        );
+
+        // ------------------------------------------------------------------
+        // Register the interest
+        // ------------------------------------------------------------------
         try {
-            $svc->registerInterest($userId, $date);
+            $bookingInterestService->registerInterest($userId, $date);
         } catch (\Exception $e) {
             return new JsonModel(array(
                 'ok'    => false,
