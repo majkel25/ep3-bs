@@ -38,9 +38,9 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                 // WhatsApp service (existing)
                 WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
-                // NOTE:
-                // *** DO NOT REGISTER BookingInterestService HERE ANY MORE ***
-                // It is constructed manually in Frontend\Controller\InterestController.
+                // BookingInterestService — REQUIRED for InterestController
+                Service\Service\BookingInterestService::class =>
+                Service\Factory\BookingInterestServiceFactory::class,
             ),
         );
     }
