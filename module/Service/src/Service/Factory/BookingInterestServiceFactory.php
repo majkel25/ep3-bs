@@ -1,6 +1,6 @@
 
  <?php
- //michael 1
+ 
  namespace Service\Factory;
  
 +use Interop\Container\ContainerInterface;
@@ -9,10 +9,13 @@
 +use Throwable;
  use Zend\Db\Adapter\Adapter;
  use Zend\Mail\Transport\TransportInterface;
- use Zend\ServiceManager\FactoryInterface;
+-use Zend\ServiceManager\FactoryInterface;
++use Zend\ServiceManager\Factory\FactoryInterface as V3FactoryInterface;
++use Zend\ServiceManager\FactoryInterface as V2FactoryInterface;
  use Zend\ServiceManager\ServiceLocatorInterface;
  
- class BookingInterestServiceFactory implements FactoryInterface
+-class BookingInterestServiceFactory implements FactoryInterface
++class BookingInterestServiceFactory implements V2FactoryInterface, V3FactoryInterface
  {
 +    /**
 +     * Zend ServiceManager v3 support.
@@ -24,7 +27,7 @@
 +     */
 +    public function __invoke(ContainerInterface $container, $requestedName, array $options = null)
 +    {
-+        return $this->createService($container);
++        return $this->doCreate($container);
 +    }
 +
      /**
@@ -32,6 +35,17 @@
       * @return BookingInterestService
       */
      public function createService(ServiceLocatorInterface $sl)
++    {
++        return $this->doCreate($sl);
++    }
++
++    /**
++     * Shared constructor to keep v2/v3 compatible.
++     *
++     * @param ContainerInterface|ServiceLocatorInterface $sl
++     * @return BookingInterestService
++     */
++    private function doCreate($sl)
      {
          /** @var Adapter $db */
          $db = $sl->get('Zend\Db\Adapter\Adapter');
