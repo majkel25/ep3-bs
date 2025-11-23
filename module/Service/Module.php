@@ -3,8 +3,6 @@
 namespace Service;
 
 use Service\Service\WhatsAppService;
-use Service\Service\BookingInterestService;
-use Service\Factory\BookingInterestServiceFactory;
 use Zend\EventManager\EventInterface;
 use Zend\ModuleManager\Feature\AutoloaderProviderInterface;
 use Zend\ModuleManager\Feature\BootstrapListenerInterface;
@@ -37,9 +35,9 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                 // WhatsApp service (existing)
                 WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
-                // BookingInterestService factory – NOTE:
-                // use the *correct* FQCN, not Service\Service\Service\BookingInterestService
-                BookingInterestService::class => BookingInterestServiceFactory::class,
+                // BookingInterestService – correct factory registration
+                'Service\Service\BookingInterestService'
+                    => 'Service\Factory\BookingInterestServiceFactory',
             ),
         );
     }
