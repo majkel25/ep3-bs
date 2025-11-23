@@ -1,9 +1,4 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/module/Service/src/Service/Factory/BookingInterestServiceFactory.php b/module/Service/src/Service/Factory/BookingInterestServiceFactory.php
-index fd05d9c0ede200ff27636adf13f34d94ddacb27b..15c41edfeaa303af8178c27a302787a4e3a046f3 100644
---- a/module/Service/src/Service/Factory/BookingInterestServiceFactory.php
-+++ b/module/Service/src/Service/Factory/BookingInterestServiceFactory.php
-@@ -1,41 +1,57 @@
+
  <?php
  
  namespace Service\Factory;
