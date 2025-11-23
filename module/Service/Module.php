@@ -3,10 +3,9 @@
 namespace Service;
 
 use Service\Service\WhatsAppService;
+use Service\Service\BookingInterestService;
+use Service\Factory\BookingInterestServiceFactory;
 use Zend\EventManager\EventInterface;
-use Zend\Mail\Transport\Sendmail;
-use Zend\Mail\Transport\Smtp;
-use Zend\Mail\Transport\SmtpOptions;
 use Zend\ModuleManager\Feature\AutoloaderProviderInterface;
 use Zend\ModuleManager\Feature\BootstrapListenerInterface;
 use Zend\ModuleManager\Feature\ConfigProviderInterface;
@@ -35,12 +34,11 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         return array(
             'factories' => array(
 
-                // WhatsApp service (existing)
-                WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
+                // WhatsApp service (already existing)
+                WhatsAppService::class        => \Service\Factory\WhatsAppServiceFactory::class,
 
-                // BookingInterestService — REQUIRED for InterestController
-                Service\Service\BookingInterestService::class =>
-                Service\Factory\BookingInterestServiceFactory::class,
+                // Correct registration for BookingInterestService
+                BookingInterestService::class => BookingInterestServiceFactory::class,
             ),
         );
     }
