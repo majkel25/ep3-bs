@@ -36,8 +36,8 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                 WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
                 // BookingInterestService – correct factory registration
-                'Service\Service\BookingInterestService'
-                    => 'Service\Factory\BookingInterestServiceFactory',
+                //'Service\Service\BookingInterestService'
+                //    => 'Service\Factory\BookingInterestServiceFactory',
             ),
         );
     }
