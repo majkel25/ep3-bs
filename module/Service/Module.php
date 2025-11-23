@@ -1,5 +1,4 @@
 <?php
-
 namespace Service;
 
 use Zend\EventManager\EventInterface;
@@ -30,12 +29,11 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
     {
         return array(
             'factories' => array(
-
-                // WhatsApp service (existing)
+                // WhatsApp service (already existing)
                 'Service\Service\WhatsAppService'
                     => 'Service\Factory\WhatsAppServiceFactory',
 
-                // BookingInterestService – used by InterestController
+                // BookingInterestService – used by InterestController and cancel workflow
                 'Service\Service\BookingInterestService'
                     => 'Service\Factory\BookingInterestServiceFactory',
             ),

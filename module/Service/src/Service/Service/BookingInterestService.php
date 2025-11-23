@@ -7,41 +7,13 @@ use Zend\Db\Sql\Select;
 use Zend\Mail\Message;
 use Zend\Mail\Transport\TransportInterface;
 
-/**
- * Handles "I am interested in this day" and notifications on cancellation.
- *
- * DB tables:
- *  - bs_booking_interest (id, user_id, interest_date, created_at, notified_at)
- *  - bs_users (uid, email, phone, notify_cancel_email, notify_cancel_whatsapp)
- */
 class BookingInterestService
 {
-    /**
-     * @var TableGateway
-     */
     protected $tg;
-
-    /**
-     * @var TransportInterface
-     */
     protected $mail;
-
-    /**
-     * @var array
-     */
     protected $mailCfg;
-
-    /**
-     * @var mixed|null WhatsAppService instance or null if unavailable
-     */
     protected $whatsApp;
 
-    /**
-     * @param Adapter            $db
-     * @param TransportInterface $mail
-     * @param array              $mailCfg
-     * @param mixed              $whatsApp  WhatsAppService|null
-     */
     public function __construct(
         Adapter $db,
         TransportInterface $mail,
@@ -54,15 +26,9 @@ class BookingInterestService
         $this->whatsApp = $whatsApp;
     }
 
-    /**
-     * Register interest of a user for a particular date (whole day).
-     *
-     * @param int                $userId
-     * @param \DateTimeInterface $date
-     */
     public function registerInterest($userId, \DateTimeInterface $date)
     {
-        $userId = (int)$userId;
+        $userId = (int) $userId;
         $d      = $date->format('Y-m-d');
 
         try {
@@ -72,7 +38,7 @@ class BookingInterestService
                 'created_at'    => (new \DateTime())->format('Y-m-d H:i:s'),
             ));
         } catch (\Exception $e) {
-            // Unique key (user_id, interest_date) will throw on duplicate registrations – ignore.
+            // ignore duplicate key
         }
     }
 
