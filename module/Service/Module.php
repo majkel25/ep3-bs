@@ -36,8 +36,8 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                 WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
                 // BookingInterestService – used by InterestController
-                \Service\Service\BookingInterestService::class =>
-                    \Service\Factory\BookingInterestServiceFactory::class,
+                //\Service\Service\BookingInterestService::class =>
+                //    \Service\Factory\BookingInterestServiceFactory::class,
             ),
         );
     }
