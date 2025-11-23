@@ -26,7 +26,7 @@ class BookingInterestServiceFactory implements FactoryInterface
         $config  = $sl->get('config');
         $mailCfg = isset($config['mail']) ? $config['mail'] : array();
 
-        /** @var WhatsAppService $wa */
+        // WhatsApp is optional
         $wa = null;
         if ($sl->has(WhatsAppService::class)) {
             try {
