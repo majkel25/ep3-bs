@@ -4,7 +4,6 @@ namespace Frontend\Controller;
 
 use Zend\Mvc\Controller\AbstractActionController;
 use Zend\View\Model\JsonModel;
-
 use Service\Service\BookingInterestService;
 
 class InterestController extends AbstractActionController
@@ -20,16 +19,13 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        // ------------------------------------------------------------------
-        // Get logged-in user via UserSessionManager – NO manual session_start
-        // ------------------------------------------------------------------
         $serviceManager = $this->getServiceLocator();
 
+        // Logged-in user via UserSessionManager (no manual session_start)
         try {
             $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
             $user               = $userSessionManager->getSessionUser();
         } catch (\Exception $e) {
-            // Any validator / session problem ends up here
             return new JsonModel(array(
                 'ok'      => false,
                 'error'   => 'AUTH_EXCEPTION',
@@ -44,9 +40,6 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        // ------------------------------------------------------------------
-        // Validate date from POST
-        // ------------------------------------------------------------------
         $dateStr = $this->params()->fromPost('date');
 
         if (! $dateStr || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
@@ -65,12 +58,8 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        // ep3-bs users use "uid" as PK
         $userId = (int) $user->need('uid');
 
-        // ------------------------------------------------------------------
-        // Use BookingInterestService from ServiceManager
-        // ------------------------------------------------------------------
         /** @var BookingInterestService $bookingInterestService */
         $bookingInterestService = $serviceManager->get(BookingInterestService::class);
 
