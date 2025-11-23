@@ -4,10 +4,22 @@ namespace Frontend\Controller;
 
 use Zend\Mvc\Controller\AbstractActionController;
 use Zend\View\Model\JsonModel;
+
 use Service\Service\BookingInterestService;
 
 class InterestController extends AbstractActionController
 {
+    /**
+     * AJAX endpoint: register interest in a specific date.
+     *
+     * Expects POST:
+     *   - date: YYYY-MM-DD
+     *
+     * Returns JSON:
+     *   { "ok": true }
+     * or
+     *   { "ok": false, "error": "..." }
+     */
     public function registerAction()
     {
         $request = $this->getRequest();
@@ -21,17 +33,21 @@ class InterestController extends AbstractActionController
 
         $serviceManager = $this->getServiceLocator();
 
-        // Logged-in user via UserSessionManager (no manual session_start)
+        // --------------------------------------------------------------------
+        // Get logged-in user via UserSessionManager
+        // --------------------------------------------------------------------
         try {
+            /** @var \User\Manager\UserSessionManager $userSessionManager */
             $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
-            $user               = $userSessionManager->getSessionUser();
         } catch (\Exception $e) {
             return new JsonModel(array(
                 'ok'      => false,
-                'error'   => 'AUTH_EXCEPTION',
-                'message' => $e->getMessage(),
+                'error'   => 'EXCEPTION',
+                'message' => 'Could not create User\\Manager\\UserSessionManager: ' . $e->getMessage(),
             ));
         }
+
+        $user = $userSessionManager->getSessionUser();
 
         if (! $user) {
             return new JsonModel(array(
@@ -40,6 +56,9 @@ class InterestController extends AbstractActionController
             ));
         }
 
+        // --------------------------------------------------------------------
+        // Validate date parameter
+        // --------------------------------------------------------------------
         $dateStr = $this->params()->fromPost('date');
 
         if (! $dateStr || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
@@ -58,11 +77,26 @@ class InterestController extends AbstractActionController
             ));
         }
 
+        // ep3-bs user entities usually store primary key as "uid"
         $userId = (int) $user->need('uid');
 
-        /** @var BookingInterestService $bookingInterestService */
-        $bookingInterestService = $serviceManager->get(BookingInterestService::class);
+        // --------------------------------------------------------------------
+        // Get BookingInterestService via ServiceManager
+        // --------------------------------------------------------------------
+        try {
+            /** @var BookingInterestService $bookingInterestService */
+            $bookingInterestService = $serviceManager->get(BookingInterestService::class);
+        } catch (\Exception $e) {
+            return new JsonModel(array(
+                'ok'      => false,
+                'error'   => 'EXCEPTION',
+                'message' => 'Could not create Service\\Service\\BookingInterestService: ' . $e->getMessage(),
+            ));
+        }
 
+        // --------------------------------------------------------------------
+        // Register the interest
+        // --------------------------------------------------------------------
         try {
             $bookingInterestService->registerInterest($userId, $date);
         } catch (\Exception $e) {
