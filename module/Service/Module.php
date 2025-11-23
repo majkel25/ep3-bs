@@ -34,10 +34,11 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
         return array(
             'factories' => array(
 
-                // WhatsApp service (already existing)
-                WhatsAppService::class        => \Service\Factory\WhatsAppServiceFactory::class,
+                // WhatsApp service (existing)
+                WhatsAppService::class => \Service\Factory\WhatsAppServiceFactory::class,
 
-                // Correct registration for BookingInterestService
+                // BookingInterestService factory – NOTE:
+                // use the *correct* FQCN, not Service\Service\Service\BookingInterestService
                 BookingInterestService::class => BookingInterestServiceFactory::class,
             ),
         );
