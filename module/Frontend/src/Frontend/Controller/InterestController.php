@@ -144,3 +144,82 @@ class InterestController extends AbstractActionController
                 ];
 
                 if (! empty($mailCfg['user'])) {
+                    $opt['connection_class'] = $mailCfg['auth'] ?? 'login';
+
+                    $opt['connection_config'] = [
+                        'username' => $mailCfg['user'],
+                        'password' => $mailCfg['pw'] ?? '',
+                    ];
+
+                    if ($type === 'smtp-tls') {
+                        $opt['connection_config']['ssl'] = 'tls';
+                    }
+                }
+
+                $mailTransport = new Smtp(new SmtpOptions($opt));
+            } else {
+                $mailTransport = new Sendmail();
+            }
+
+            /**
+             * 7) Optional WhatsApp service
+             */
+            $whatsApp = null;
+
+            if ($serviceManager->has(WhatsAppService::class)) {
+                try {
+                    $whatsApp = $serviceManager->get(WhatsAppService::class);
+                } catch (\Throwable $e) {
+                    $whatsApp = null;
+                }
+            }
+
+            /**
+             * 8) Get BookingInterestService from the ServiceManager
+             *    (no manual require_once – lets us catch errors as JSON)
+             */
+            try {
+                /** @var \Service\Service\BookingInterestService $bookingInterestService */
+                $bookingInterestService = $serviceManager->get('Service\Service\BookingInterestService');
+            } catch (\Throwable $e) {
+                return new JsonModel([
+                    'ok'      => false,
+                    'error'   => 'CREATE_BOOKING_INTEREST_SERVICE_FAILED',
+                    'message' => $e->getMessage(),
+                    'type'    => get_class($e),
+                ]);
+            }
+
+            /**
+             * 9) Register interest in DB (and trigger notifications)
+             */
+            try {
+                $bookingInterestService->registerInterest($userId, $date);
+            } catch (\Throwable $e) {
+                return new JsonModel([
+                    'ok'      => false,
+                    'error'   => 'REGISTER_INTEREST_FAILED',
+                    'message' => $e->getMessage(),
+                    'type'    => get_class($e),
+                ]);
+            }
+
+            /**
+             * 10) Success JSON
+             */
+            return new JsonModel([
+                'ok'      => true,
+                'user_id' => (int)$userId,
+                'date'    => $date->format('Y-m-d'),
+            ]);
+        } catch (\Throwable $e) {
+            // Final safety net – still JSON, not HTML
+            return new JsonModel([
+                'ok'    => false,
+                'error' => 'UNCAUGHT_SERVER_EXCEPTION',
+                'msg'   => $e->getMessage(),
+                'type'  => get_class($e),
+            ]);
+        }
+    }
+}
