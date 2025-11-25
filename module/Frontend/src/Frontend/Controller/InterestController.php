@@ -72,7 +72,7 @@ class InterestController extends AbstractActionController
 
             /**
              * 3) Extract user ID
-             *    (leave this exactly as it worked before)
+             *    (LEAVE AS-IS – this is what works now)
              */
             $userId = null;
 
@@ -177,8 +177,25 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 8) Build BookingInterestService
-             *    (if constructor signature doesn't match, we'll catch it below)
+             * 8) Ensure BookingInterestService class is loaded
+             *    (clone env clearly isn't autoloading it)
+             */
+            if (! class_exists(BookingInterestService::class)) {
+                $path = __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
+                @include_once $path;
+
+                if (! class_exists(BookingInterestService::class)) {
+                    return new JsonModel([
+                        'ok'      => false,
+                        'error'   => 'CREATE_BOOKING_INTEREST_SERVICE_FAILED',
+                        'message' => 'BookingInterestService class not found, tried include: ' . $path,
+                        'type'    => 'ClassNotFound',
+                    ]);
+                }
+            }
+
+            /**
+             * 9) Build BookingInterestService
              */
             try {
                 $bookingInterestService = new BookingInterestService(
@@ -197,7 +214,7 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 9) Register interest in DB (and trigger notifications)
+             * 10) Register interest in DB (and trigger notifications)
              */
             try {
                 $bookingInterestService->registerInterest($userId, $date);
@@ -211,7 +228,7 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 10) Success JSON
+             * 11) Success JSON
              */
             return new JsonModel([
                 'ok'      => true,
