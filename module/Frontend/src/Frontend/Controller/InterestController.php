@@ -10,7 +10,6 @@ use Zend\Mail\Transport\Smtp;
 use Zend\Mail\Transport\SmtpOptions;
 
 use User\Manager\UserSessionManager;
-use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
 
 class InterestController extends AbstractActionController
@@ -72,7 +71,7 @@ class InterestController extends AbstractActionController
 
             /**
              * 3) Extract user ID
-             *    (LEAVE AS-IS – this is what works now)
+             *    (this is the logic that was working – unchanged)
              */
             $userId = null;
 
@@ -164,6 +163,7 @@ class InterestController extends AbstractActionController
 
             /**
              * 7) Optional WhatsApp service
+             *    (this is just here for completeness; if it fails, we ignore it)
              */
             $whatsApp = null;
 
@@ -171,39 +171,17 @@ class InterestController extends AbstractActionController
                 try {
                     $whatsApp = $serviceManager->get(WhatsAppService::class);
                 } catch (\Throwable $e) {
-                    // ignore WhatsApp failures – they shouldn't kill the whole request
                     $whatsApp = null;
                 }
             }
 
             /**
-             * 8) Ensure BookingInterestService class is loaded
-             *    (clone env clearly isn't autoloading it)
-             */
-            if (! class_exists(BookingInterestService::class)) {
-                $path = __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
-                @include_once $path;
-
-                if (! class_exists(BookingInterestService::class)) {
-                    return new JsonModel([
-                        'ok'      => false,
-                        'error'   => 'CREATE_BOOKING_INTEREST_SERVICE_FAILED',
-                        'message' => 'BookingInterestService class not found, tried include: ' . $path,
-                        'type'    => 'ClassNotFound',
-                    ]);
-                }
-            }
-
-            /**
-             * 9) Build BookingInterestService
+             * 8) Get BookingInterestService from the ServiceManager
+             *    Let ZF wiring / autoload handle construction.
              */
             try {
-                $bookingInterestService = new BookingInterestService(
-                    $dbAdapter,
-                    $mailTransport,
-                    $mailCfg,
-                    $whatsApp
-                );
+                /** @var \Service\Service\BookingInterestService $bookingInterestService */
+                $bookingInterestService = $serviceManager->get('Service\Service\BookingInterestService');
             } catch (\Throwable $e) {
                 return new JsonModel([
                     'ok'      => false,
@@ -214,7 +192,7 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 10) Register interest in DB (and trigger notifications)
+             * 9) Register interest in DB (and trigger notifications)
              */
             try {
                 $bookingInterestService->registerInterest($userId, $date);
@@ -228,7 +206,7 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 11) Success JSON
+             * 10) Success JSON
              */
             return new JsonModel([
                 'ok'      => true,
@@ -236,7 +214,7 @@ class InterestController extends AbstractActionController
                 'date'    => $date->format('Y-m-d'),
             ]);
         } catch (\Throwable $e) {
-            // final safety net: still JSON, not HTML
+            // Final safety net – still JSON, not HTML
             return new JsonModel([
                 'ok'    => false,
                 'error' => 'UNCAUGHT_SERVER_EXCEPTION',
