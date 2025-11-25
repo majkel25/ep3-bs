@@ -15,7 +15,8 @@ use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
 
 // Hard-include BookingInterestService to avoid autoload issues in some environments
-require_once getcwd() . '/module/Service/src/Service/BookingInterestService.php';
+//require_once getcwd() . '/module/Service/src/Service/BookingInterestService.php';
+require_once __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
 
 class InterestController extends AbstractActionController
 {
