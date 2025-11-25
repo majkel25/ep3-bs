@@ -14,8 +14,7 @@ use Zend\Session\Container;
 use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
 
-// Hard-include BookingInterestService to avoid autoload issues in some environments
-//require_once getcwd() . '/module/Service/src/Service/BookingInterestService.php';
+// Hard-include the service as a safety net in case autoload is still misbehaving
 require_once __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
 
 class InterestController extends AbstractActionController
@@ -33,161 +32,77 @@ class InterestController extends AbstractActionController
      */
     public function registerAction()
     {
-        $request = $this->getRequest();
-        $serviceManager = $this->getServiceLocator();
-
-        if (! $request->isPost()) {
-            return new JsonModel(array(
-                'ok'    => false,
-                'error' => 'METHOD_NOT_ALLOWED',
-            ));
-        }
-
-        
-
-        // --------------------------------------------------------------------
-        // 1+2) Resolve current user via UserSessionManager
-        //     (uses the same session handling as the rest of the app)
-        // --------------------------------------------------------------------
         try {
+            $request = $this->getRequest();
+
+            if (!$request->isPost()) {
+                return new JsonModel([
+                    'ok'    => false,
+                    'error' => 'METHOD_NOT_ALLOWED',
+                ]);
+            }
+
+            // -----------------------------------------------------------------
+            // 1) Resolve current user
+            // -----------------------------------------------------------------
+            $serviceManager     = $this->getServiceLocator();
+            /** @var \User\Manager\UserSessionManager $userSessionManager */
             $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
-        } catch (\Exception $e) {
-            return new JsonModel(array(
-                'ok'      => false,
-                'error'   => 'EXCEPTION',
-                'message' => 'Could not get User\\Manager\\UserSessionManager: ' . $e->getMessage(),
-            ));
-        }
+            $user               = $userSessionManager->getUser();
 
-        $user = $userSessionManager->getSessionUser();
-
-        if (! $user) {
-            return new JsonModel(array(
-                'ok'    => false,
-                'error' => 'AUTH_REQUIRED',
-            ));
-        }
-
-        $userId = (int) $user->need('uid');
-
-        // --------------------------------------------------------------------
-        // 3) Validate date parameter
-        // --------------------------------------------------------------------
-        $dateStr = $this->params()->fromPost('date');
-
-        if (! $dateStr || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
-            return new JsonModel(array(
-                'ok'    => false,
-                'error' => 'INVALID_DATE',
-            ));
-        }
-
-        try {
-            $date = new \DateTime($dateStr);
-        } catch (\Exception $e) {
-            return new JsonModel(array(
-                'ok'    => false,
-                'error' => 'INVALID_DATE',
-            ));
-        }
-
-        // --------------------------------------------------------------------
-        // 4) Build BookingInterestService **manually** – no ServiceManager->get
-        // --------------------------------------------------------------------
-
-        // 4a) DB adapter
-        try {
-            /** @var Adapter $dbAdapter */
-            $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
-        } catch (\Exception $e) {
-            return new JsonModel(array(
-                'ok'      => false,
-                'error'   => 'EXCEPTION',
-                'message' => 'Could not get Zend\\Db\\Adapter\\Adapter: ' . $e->getMessage(),
-            ));
-        }
-
-        // 4b) Mail configuration
-        try {
-            $config = $serviceManager->get('Config');
-        } catch (\Exception $e) {
-            $config = array();
-        }
-
-        $mailCfg = isset($config['mail']) && is_array($config['mail'])
-            ? $config['mail']
-            : array();
-
-        // 4c) Build mail transport (Sendmail / SMTP / SMTP-TLS)
-        $type = isset($mailCfg['type']) ? strtolower($mailCfg['type']) : 'sendmail';
-
-        if ($type === 'smtp' || $type === 'smtp-tls') {
-            $host = isset($mailCfg['host']) ? $mailCfg['host'] : 'localhost';
-            $port = isset($mailCfg['port']) ? (int) $mailCfg['port'] : 25;
-
-            $optionsArray = array(
-                'name' => $host,
-                'host' => $host,
-                'port' => $port,
-            );
-
-            if (!empty($mailCfg['user'])) {
-                $optionsArray['connection_class'] =
-                    !empty($mailCfg['auth']) ? $mailCfg['auth'] : 'login';
-
-                $connCfg = array(
-                    'username' => $mailCfg['user'],
-                    'password' => isset($mailCfg['pw']) ? $mailCfg['pw'] : '',
-                );
-
-                if ($type === 'smtp-tls') {
-                    $connCfg['ssl'] = 'tls';
-                }
-
-                $optionsArray['connection_config'] = $connCfg;
+            if (!$user) {
+                return new JsonModel([
+                    'ok'    => false,
+                    'error' => 'USER_NOT_LOGGED_IN',
+                ]);
             }
 
-            $options       = new SmtpOptions($optionsArray);
-            $mailTransport = new Smtp($options);
-        } else {
-            // Default: Sendmail
-            $mailTransport = new Sendmail();
-        }
+            // -----------------------------------------------------------------
+            // 2) Validate date parameter
+            // -----------------------------------------------------------------
+            $dateStr = $this->params()->fromPost('date');
 
-        // 4d) Optional WhatsApp service – best-effort only
-        $whatsApp = null;
+            if (!$dateStr || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
+                return new JsonModel([
+                    'ok'    => false,
+                    'error' => 'INVALID_DATE',
+                ]);
+            }
 
-        if ($serviceManager->has(WhatsAppService::class)) {
             try {
-                $whatsApp = $serviceManager->get(WhatsAppService::class);
+                $date = new \DateTime($dateStr);
             } catch (\Exception $e) {
-                $whatsApp = null;
+                return new JsonModel([
+                    'ok'    => false,
+                    'error' => 'INVALID_DATE',
+                ]);
             }
+
+            // -----------------------------------------------------------------
+            // 3) Get BookingInterestService from ServiceManager
+            // -----------------------------------------------------------------
+            /** @var BookingInterestService $bookingInterestService */
+            $bookingInterestService = $serviceManager->get('Booking\Service\BookingInterestService');
+
+            // NOTE: we pass $user and $date; if the signature is different
+            // we’ll see the exact message in the JSON error below.
+            $bookingInterestService->registerInterest($user, $date);
+
+            // -----------------------------------------------------------------
+            // 4) Success
+            // -----------------------------------------------------------------
+            return new JsonModel([
+                'ok' => true,
+            ]);
+
+        } catch (\Throwable $e) {
+            // DEBUG OUTPUT so we see the real cause instead of generic HTTP 500
+            return new JsonModel([
+                'ok'    => false,
+                'error' => $e->getMessage(),
+                'type'  => get_class($e),
+                'trace' => $e->getTraceAsString(),
+            ]);
         }
-
-        // 4e) Finally create BookingInterestService directly
-        $bookingInterestService = new BookingInterestService(
-            $dbAdapter,
-            $mailTransport,
-            $mailCfg,
-            $whatsApp
-        );
-
-        // --------------------------------------------------------------------
-        // 5) Register the interest
-        // --------------------------------------------------------------------
-        try {
-            $bookingInterestService->registerInterest($userId, $date);
-        } catch (\Exception $e) {
-            return new JsonModel(array(
-                'ok'      => false,
-                'error'   => 'SERVER_ERROR',
-                'message' => $e->getMessage(),
-            ));
-        }
-
-        return new JsonModel(array(
-            'ok' => true,
-        ));
     }
 }
