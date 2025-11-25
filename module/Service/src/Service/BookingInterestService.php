@@ -1,4 +1,5 @@
 ﻿<?php
+
 namespace Service\Service;
 
 use Zend\Db\Adapter\Adapter;
