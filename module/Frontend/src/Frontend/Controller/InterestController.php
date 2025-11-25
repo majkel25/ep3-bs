@@ -5,26 +5,28 @@ namespace Frontend\Controller;
 use Zend\Mvc\Controller\AbstractActionController;
 use Zend\View\Model\JsonModel;
 
-use Service\Service\BookingInterestService;
-use Service\Service\WhatsAppService;
-
+use Zend\Db\Adapter\Adapter;
 use Zend\Mail\Transport\Sendmail;
 use Zend\Mail\Transport\Smtp;
 use Zend\Mail\Transport\SmtpOptions;
+use Zend\Session\Container;
 
-/**
- * AJAX endpoint to register interest in a given day.
- *
- * URL:  /interest/register
- * POST: date=YYYY-MM-DD
- *
- * Response (JSON):
- *   { "ok": true }
- * or
- *   { "ok": false, "error": "...", "message": "..." (optional) }
- */
+use Service\Service\BookingInterestService;
+use Service\Service\WhatsAppService;
+
 class InterestController extends AbstractActionController
 {
+    /**
+     * AJAX endpoint: register interest in a specific date.
+     *
+     * Expects POST:
+     *   - date: YYYY-MM-DD
+     *
+     * Returns JSON:
+     *   { "ok": true }
+     * or
+     *   { "ok": false, "error": "..." }
+     */
     public function registerAction()
     {
         $request = $this->getRequest();
@@ -38,17 +40,31 @@ class InterestController extends AbstractActionController
 
         $serviceManager = $this->getServiceLocator();
 
-        // ------------------------------------------------------------------
-        // Make sure we are on the same PHP session as ep3-bs
-        // ------------------------------------------------------------------
-        $config = $serviceManager->get('Config');
+        // --------------------------------------------------------------------
+        // 1) Attach to the SAME PHP session as ep3-bs (using ConfigManager)
+        // --------------------------------------------------------------------
+        try {
+            /** @var \Base\Manager\ConfigManager $configManager */
+            $configManager = $serviceManager->get('Base\Manager\ConfigManager');
+        } catch (\Exception $e) {
+            return new JsonModel(array(
+                'ok'      => false,
+                'error'   => 'EXCEPTION',
+                'message' => 'Could not get Base\\Manager\\ConfigManager: ' . $e->getMessage(),
+            ));
+        }
 
-        if (isset($config['session']['config']['name'])
-            && is_string($config['session']['config']['name'])
-            && $config['session']['config']['name'] !== ''
-        ) {
-            $sessionName = $config['session']['config']['name'];
+        try {
+            $sessionName = $configManager->need('session_config.name');
+        } catch (\Exception $e) {
+            return new JsonModel(array(
+                'ok'      => false,
+                'error'   => 'EXCEPTION',
+                'message' => 'Could not read session_config.name: ' . $e->getMessage(),
+            ));
+        }
 
+        if (is_string($sessionName) && $sessionName !== '') {
             if (session_name() !== $sessionName) {
                 if (session_status() === PHP_SESSION_ACTIVE) {
                     session_write_close();
@@ -61,21 +77,38 @@ class InterestController extends AbstractActionController
             @session_start();
         }
 
-        // ------------------------------------------------------------------
-        // Logged-in user via UserSessionManager
-        // ------------------------------------------------------------------
+        // --------------------------------------------------------------------
+        // 2) Resolve current user directly from the session container
+        //    (same logic as UserSessionManager::getSessionUser())
+        // --------------------------------------------------------------------
         try {
-            /** @var \User\Manager\UserSessionManager $userSessionManager */
-            $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
+            $userManager = $serviceManager->get('User\Manager\UserManager');
         } catch (\Exception $e) {
             return new JsonModel(array(
                 'ok'      => false,
                 'error'   => 'EXCEPTION',
-                'message' => 'Could not create User\\Manager\\UserSessionManager: ' . $e->getMessage(),
+                'message' => 'Could not get User\\Manager\\UserManager: ' . $e->getMessage(),
             ));
         }
 
-        $user = $userSessionManager->getSessionUser();
+        $sessionContainer = new Container('UserSession');
+
+        if (!isset($sessionContainer->uid) || !is_numeric($sessionContainer->uid) || $sessionContainer->uid <= 0) {
+            return new JsonModel(array(
+                'ok'    => false,
+                'error' => 'AUTH_REQUIRED',
+            ));
+        }
+
+        try {
+            $user = $userManager->get($sessionContainer->uid, false);
+        } catch (\Exception $e) {
+            return new JsonModel(array(
+                'ok'      => false,
+                'error'   => 'EXCEPTION',
+                'message' => 'Could not load user from UserManager: ' . $e->getMessage(),
+            ));
+        }
 
         if (! $user) {
             return new JsonModel(array(
@@ -84,9 +117,11 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        // ------------------------------------------------------------------
-        // Validate date parameter
-        // ------------------------------------------------------------------
+        $userId = (int) $user->need('uid');
+
+        // --------------------------------------------------------------------
+        // 3) Validate date parameter
+        // --------------------------------------------------------------------
         $dateStr = $this->params()->fromPost('date');
 
         if (! $dateStr || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
@@ -105,24 +140,37 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        // ep3-bs user entities usually store primary key as "uid"
-        $userId = (int) $user->need('uid');
+        // --------------------------------------------------------------------
+        // 4) Build BookingInterestService **manually** – no ServiceManager->get
+        // --------------------------------------------------------------------
 
-        // ------------------------------------------------------------------
-        // MANUALLY build BookingInterestService (NO ServiceManager::get())
-        // ------------------------------------------------------------------
+        // 4a) DB adapter
+        try {
+            /** @var Adapter $dbAdapter */
+            $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
+        } catch (\Exception $e) {
+            return new JsonModel(array(
+                'ok'      => false,
+                'error'   => 'EXCEPTION',
+                'message' => 'Could not get Zend\\Db\\Adapter\\Adapter: ' . $e->getMessage(),
+            ));
+        }
 
-        // DB adapter
-        $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
+        // 4b) Mail configuration
+        try {
+            $config = $serviceManager->get('Config');
+        } catch (\Exception $e) {
+            $config = array();
+        }
 
-        // Mail configuration
-        $mailCfg = isset($config['mail']) ? $config['mail'] : array();
+        $mailCfg = isset($config['mail']) && is_array($config['mail'])
+            ? $config['mail']
+            : array();
 
-        // Build mail transport (Sendmail / SMTP / SMTP-TLS)
+        // 4c) Build mail transport (Sendmail / SMTP / SMTP-TLS)
         $type = isset($mailCfg['type']) ? strtolower($mailCfg['type']) : 'sendmail';
 
         if ($type === 'smtp' || $type === 'smtp-tls') {
-
             $host = isset($mailCfg['host']) ? $mailCfg['host'] : 'localhost';
             $port = isset($mailCfg['port']) ? (int) $mailCfg['port'] : 25;
 
@@ -132,7 +180,6 @@ class InterestController extends AbstractActionController
                 'port' => $port,
             );
 
-            // Authentication config
             if (!empty($mailCfg['user'])) {
                 $optionsArray['connection_class'] =
                     !empty($mailCfg['auth']) ? $mailCfg['auth'] : 'login';
@@ -151,14 +198,14 @@ class InterestController extends AbstractActionController
 
             $options       = new SmtpOptions($optionsArray);
             $mailTransport = new Smtp($options);
-
         } else {
             // Default: Sendmail
             $mailTransport = new Sendmail();
         }
 
-        // WhatsApp service is optional – if anything fails, we just skip WhatsApp.
+        // 4d) Optional WhatsApp service – best-effort only
         $whatsApp = null;
+
         if ($serviceManager->has(WhatsAppService::class)) {
             try {
                 $whatsApp = $serviceManager->get(WhatsAppService::class);
@@ -167,7 +214,7 @@ class InterestController extends AbstractActionController
             }
         }
 
-        // Finally: create BookingInterestService DIRECTLY
+        // 4e) Finally create BookingInterestService directly
         $bookingInterestService = new BookingInterestService(
             $dbAdapter,
             $mailTransport,
@@ -175,9 +222,9 @@ class InterestController extends AbstractActionController
             $whatsApp
         );
 
-        // ------------------------------------------------------------------
-        // Register the interest
-        // ------------------------------------------------------------------
+        // --------------------------------------------------------------------
+        // 5) Register the interest
+        // --------------------------------------------------------------------
         try {
             $bookingInterestService->registerInterest($userId, $date);
         } catch (\Exception $e) {
