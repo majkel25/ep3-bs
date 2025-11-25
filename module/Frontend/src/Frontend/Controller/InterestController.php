@@ -72,7 +72,7 @@ class InterestController extends AbstractActionController
 
             /**
              * 3) Extract user ID
-             *    (unchanged – this is what works now)
+             *    (unchanged – this is the logic that works now)
              */
             $userId = null;
 
@@ -176,8 +176,14 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 8) Instantiate BookingInterestService directly
+             * 8) Ensure BookingInterestService class is loaded, then instantiate it
+             *    (we do this INSIDE the action to avoid fatal errors before JSON handling)
              */
+            if (!class_exists(BookingInterestService::class, false)) {
+                $path = __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
+                @require_once $path;
+            }
+
             try {
                 $bookingInterestService = new BookingInterestService(
                     $dbAdapter,
