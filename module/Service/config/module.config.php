@@ -50,6 +50,15 @@ return array(
             'Service\Controller\Service' => 'Service\Controller\ServiceController',
         ),
     ),
+    
+    'service_manager' => [
+        'factories' => [
+            \Service\Service\BookingInterestService::class =>
+                \Service\Factory\BookingInterestServiceFactory::class,
+            \Service\Service\WhatsAppService::class =>
+                \Service\Factory\WhatsAppServiceFactory::class,
+        ],
+    ],
 
     'view_manager' => array(
         'template_path_stack' => array(
