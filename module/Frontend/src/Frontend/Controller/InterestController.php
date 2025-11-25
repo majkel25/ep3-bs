@@ -41,74 +41,20 @@ class InterestController extends AbstractActionController
         $serviceManager = $this->getServiceLocator();
 
         // --------------------------------------------------------------------
-        // 1) Attach to the SAME PHP session as ep3-bs (using ConfigManager)
+        // 1+2) Resolve current user via UserSessionManager
+        //     (uses the same session handling as the rest of the app)
         // --------------------------------------------------------------------
         try {
-            /** @var \Base\Manager\ConfigManager $configManager */
-            $configManager = $serviceManager->get('Base\Manager\ConfigManager');
+            $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
         } catch (\Exception $e) {
             return new JsonModel(array(
                 'ok'      => false,
                 'error'   => 'EXCEPTION',
-                'message' => 'Could not get Base\\Manager\\ConfigManager: ' . $e->getMessage(),
+                'message' => 'Could not get User\\Manager\\UserSessionManager: ' . $e->getMessage(),
             ));
         }
 
-        try {
-            $sessionName = $configManager->need('session_config.name');
-        } catch (\Exception $e) {
-            return new JsonModel(array(
-                'ok'      => false,
-                'error'   => 'EXCEPTION',
-                'message' => 'Could not read session_config.name: ' . $e->getMessage(),
-            ));
-        }
-
-        if (is_string($sessionName) && $sessionName !== '') {
-            if (session_name() !== $sessionName) {
-                if (session_status() === PHP_SESSION_ACTIVE) {
-                    session_write_close();
-                }
-                session_name($sessionName);
-            }
-        }
-
-        if (session_status() !== PHP_SESSION_ACTIVE) {
-            @session_start();
-        }
-
-        // --------------------------------------------------------------------
-        // 2) Resolve current user directly from the session container
-        //    (same logic as UserSessionManager::getSessionUser())
-        // --------------------------------------------------------------------
-        try {
-            $userManager = $serviceManager->get('User\Manager\UserManager');
-        } catch (\Exception $e) {
-            return new JsonModel(array(
-                'ok'      => false,
-                'error'   => 'EXCEPTION',
-                'message' => 'Could not get User\\Manager\\UserManager: ' . $e->getMessage(),
-            ));
-        }
-
-        $sessionContainer = new Container('UserSession');
-
-        if (!isset($sessionContainer->uid) || !is_numeric($sessionContainer->uid) || $sessionContainer->uid <= 0) {
-            return new JsonModel(array(
-                'ok'    => false,
-                'error' => 'AUTH_REQUIRED',
-            ));
-        }
-
-        try {
-            $user = $userManager->get($sessionContainer->uid, false);
-        } catch (\Exception $e) {
-            return new JsonModel(array(
-                'ok'      => false,
-                'error'   => 'EXCEPTION',
-                'message' => 'Could not load user from UserManager: ' . $e->getMessage(),
-            ));
-        }
+        $user = $userSessionManager->getSessionUser();
 
         if (! $user) {
             return new JsonModel(array(
