@@ -34,6 +34,7 @@ class InterestController extends AbstractActionController
     public function registerAction()
     {
         $request = $this->getRequest();
+        $serviceManager = $this->getServiceLocator();
 
         if (! $request->isPost()) {
             return new JsonModel(array(
@@ -42,7 +43,7 @@ class InterestController extends AbstractActionController
             ));
         }
 
-        $serviceManager = $this->getServiceLocator();
+        
 
         // --------------------------------------------------------------------
         // 1+2) Resolve current user via UserSessionManager
