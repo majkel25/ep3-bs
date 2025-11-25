@@ -11,6 +11,7 @@ use Zend\Mail\Transport\SmtpOptions;
 
 use User\Manager\UserSessionManager;
 use Service\Service\WhatsAppService;
+use Service\Service\BookingInterestService;
 
 class InterestController extends AbstractActionController
 {
@@ -24,7 +25,7 @@ class InterestController extends AbstractActionController
         try {
             $request = $this->getRequest();
 
-            if (! $request->isPost()) {
+            if (!$request->isPost()) {
                 return new JsonModel([
                     'ok'    => false,
                     'error' => 'METHOD_NOT_ALLOWED',
@@ -62,7 +63,7 @@ class InterestController extends AbstractActionController
                 ]);
             }
 
-            if (! $user) {
+            if (!$user) {
                 return new JsonModel([
                     'ok'    => false,
                     'error' => 'USER_NOT_LOGGED_IN',
@@ -71,7 +72,7 @@ class InterestController extends AbstractActionController
 
             /**
              * 3) Extract user ID
-             *    (this is the logic that works – unchanged)
+             *    (unchanged – this is what works now)
              */
             $userId = null;
 
@@ -82,7 +83,7 @@ class InterestController extends AbstractActionController
                 $userId = $user->get('uid');
             }
 
-            if (! $userId || ! is_numeric($userId)) {
+            if (!$userId || !is_numeric($userId)) {
                 return new JsonModel([
                     'ok'    => false,
                     'error' => 'USER_ID_NOT_AVAILABLE',
@@ -94,7 +95,7 @@ class InterestController extends AbstractActionController
              */
             $dateStr = $this->params()->fromPost('date');
 
-            if (! $dateStr || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
+            if (!$dateStr || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
                 return new JsonModel([
                     'ok'    => false,
                     'error' => 'INVALID_DATE',
@@ -143,7 +144,7 @@ class InterestController extends AbstractActionController
                     'port' => $port,
                 ];
 
-                if (! empty($mailCfg['user'])) {
+                if (!empty($mailCfg['user'])) {
                     $opt['connection_class'] = $mailCfg['auth'] ?? 'login';
 
                     $opt['connection_config'] = [
@@ -175,12 +176,15 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 8) Get BookingInterestService from the ServiceManager
-             *    (no manual require_once – lets us catch errors as JSON)
+             * 8) Instantiate BookingInterestService directly
              */
             try {
-                /** @var \Service\Service\BookingInterestService $bookingInterestService */
-                $bookingInterestService = $serviceManager->get('Service\Service\BookingInterestService');
+                $bookingInterestService = new BookingInterestService(
+                    $dbAdapter,
+                    $mailTransport,
+                    $mailCfg,
+                    $whatsApp
+                );
             } catch (\Throwable $e) {
                 return new JsonModel([
                     'ok'      => false,
@@ -213,7 +217,7 @@ class InterestController extends AbstractActionController
                 'date'    => $date->format('Y-m-d'),
             ]);
         } catch (\Throwable $e) {
-            // Final safety net – still JSON, not HTML
+            // final safety net – still JSON, not HTML
             return new JsonModel([
                 'ok'    => false,
                 'error' => 'UNCAUGHT_SERVER_EXCEPTION',
