@@ -9,8 +9,11 @@ use Zend\Mail\Transport\Sendmail;
 use Zend\Mail\Transport\Smtp;
 use Zend\Mail\Transport\SmtpOptions;
 
-use User\Manager\UserSessionManager;
+use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
+
+// Hard-include service to guarantee autoloading
+require_once __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
 
 class InterestController extends AbstractActionController
 {
@@ -33,30 +36,19 @@ class InterestController extends AbstractActionController
 
             $serviceManager = $this->getServiceLocator();
 
-            /**
-             * 1) Resolve UserSessionManager
-             */
+            //
+            // 1) GET CURRENT LOGGED USER
+            //
             try {
-                /** @var UserSessionManager $userSessionManager */
+                /** @var \User\Manager\UserSessionManager $userSessionManager */
                 $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
-            } catch (\Throwable $e) {
-                return new JsonModel([
-                    'ok'      => false,
-                    'error'   => 'EXCEPTION_RESOLVING_USERSESSIONMANAGER',
-                    'message' => $e->getMessage(),
-                    'type'    => get_class($e),
-                ]);
-            }
 
-            /**
-             * 2) Get current session user
-             */
-            try {
+                // this is the correct method from your UserSessionManager
                 $user = $userSessionManager->getSessionUser();
             } catch (\Throwable $e) {
                 return new JsonModel([
                     'ok'      => false,
-                    'error'   => 'EXCEPTION_GETTING_SESSION_USER',
+                    'error'   => 'EXCEPTION_RESOLVING_USER',
                     'message' => $e->getMessage(),
                     'type'    => get_class($e),
                 ]);
@@ -69,17 +61,19 @@ class InterestController extends AbstractActionController
                 ]);
             }
 
-            /**
-             * 3) Extract user ID
-             *    (this is the logic that was working – unchanged)
-             */
+            //
+            // 2) Extract user ID
+            //    IMPORTANT: this now matches how your User entity is used elsewhere
+            //
             $userId = null;
 
             if (method_exists($user, 'need')) {
-                // your User entity uses ->need('uid')
+                // same pattern as in UserSessionManager: $user->need('uid')
                 $userId = $user->need('uid');
             } elseif (method_exists($user, 'get')) {
                 $userId = $user->get('uid');
+            } elseif (isset($user->id)) {
+                $userId = $user->id;
             }
 
             if (! $userId || ! is_numeric($userId)) {
@@ -89,9 +83,9 @@ class InterestController extends AbstractActionController
                 ]);
             }
 
-            /**
-             * 4) Validate date parameter from POST
-             */
+            //
+            // 3) Validate date parameter
+            //
             $dateStr = $this->params()->fromPost('date');
 
             if (! $dateStr || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
@@ -110,9 +104,9 @@ class InterestController extends AbstractActionController
                 ]);
             }
 
-            /**
-             * 5) DB adapter
-             */
+            //
+            // 4) Build DB adapter
+            //
             try {
                 /** @var Adapter $dbAdapter */
                 $dbAdapter = $serviceManager->get('Zend\Db\Adapter\Adapter');
@@ -121,13 +115,12 @@ class InterestController extends AbstractActionController
                     'ok'      => false,
                     'error'   => 'DB_ADAPTER_ERROR',
                     'message' => $e->getMessage(),
-                    'type'    => get_class($e),
                 ]);
             }
 
-            /**
-             * 6) Mail configuration / transport
-             */
+            //
+            // 5) Mail configuration
+            //
             $config  = $serviceManager->get('Config');
             $mailCfg = isset($config['mail']) ? $config['mail'] : [];
 
@@ -161,10 +154,9 @@ class InterestController extends AbstractActionController
                 $mailTransport = new Sendmail();
             }
 
-            /**
-             * 7) Optional WhatsApp service
-             *    (this is just here for completeness; if it fails, we ignore it)
-             */
+            //
+            // 6) WhatsApp optional
+            //
             $whatsApp = null;
 
             if ($serviceManager->has(WhatsAppService::class)) {
@@ -175,50 +167,33 @@ class InterestController extends AbstractActionController
                 }
             }
 
-            /**
-             * 8) Get BookingInterestService from the ServiceManager
-             *    Let ZF wiring / autoload handle construction.
-             */
-            try {
-                /** @var \Service\Service\BookingInterestService $bookingInterestService */
-                $bookingInterestService = $serviceManager->get('Service\Service\BookingInterestService');
-            } catch (\Throwable $e) {
-                return new JsonModel([
-                    'ok'      => false,
-                    'error'   => 'CREATE_BOOKING_INTEREST_SERVICE_FAILED',
-                    'message' => $e->getMessage(),
-                    'type'    => get_class($e),
-                ]);
-            }
+            //
+            // 7) Build the service manually 
+            //
+            $bookingInterestService = new BookingInterestService(
+                $dbAdapter,
+                $mailTransport,
+                $mailCfg,
+                $whatsApp
+            );
 
-            /**
-             * 9) Register interest in DB (and trigger notifications)
-             */
-            try {
-                $bookingInterestService->registerInterest($userId, $date);
-            } catch (\Throwable $e) {
-                return new JsonModel([
-                    'ok'      => false,
-                    'error'   => 'REGISTER_INTEREST_FAILED',
-                    'message' => $e->getMessage(),
-                    'type'    => get_class($e),
-                ]);
-            }
+            //
+            // 8) Register interest
+            //
+            $bookingInterestService->registerInterest($userId, $date);
 
-            /**
-             * 10) Success JSON
-             */
             return new JsonModel([
                 'ok'      => true,
                 'user_id' => (int)$userId,
                 'date'    => $date->format('Y-m-d'),
             ]);
         } catch (\Throwable $e) {
-            // Final safety net – still JSON, not HTML
+            // FINAL fallback
             return new JsonModel([
                 'ok'    => false,
                 'error' => 'UNCAUGHT_SERVER_EXCEPTION',
                 'msg'   => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
                 'type'  => get_class($e),
             ]);
         }
