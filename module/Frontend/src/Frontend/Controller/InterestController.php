@@ -11,6 +11,7 @@ use Zend\Mail\Transport\SmtpOptions;
 
 use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
+use User\Manager\UserSessionManager;
 
 // Hard-include service to guarantee autoloading
 require_once __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
@@ -27,7 +28,7 @@ class InterestController extends AbstractActionController
         try {
             $request = $this->getRequest();
 
-            if (!$request->isPost()) {
+            if (! $request->isPost()) {
                 return new JsonModel([
                     'ok'    => false,
                     'error' => 'METHOD_NOT_ALLOWED',
@@ -40,40 +41,48 @@ class InterestController extends AbstractActionController
             // 1) GET CURRENT LOGGED USER
             //
             try {
+                /** @var UserSessionManager $userSessionManager */
                 $userSessionManager = $serviceManager->get('User\Manager\UserSessionManager');
+
+                // IMPORTANT: this is the correct method from your UserSessionManager
                 $user = $userSessionManager->getSessionUser();
             } catch (\Throwable $e) {
                 return new JsonModel([
                     'ok'      => false,
                     'error'   => 'EXCEPTION_RESOLVING_USER',
                     'message' => $e->getMessage(),
-                    'type'    => get_class($e)
+                    'type'    => get_class($e),
                 ]);
             }
 
-            if (!$user) {
+            if (! $user) {
                 return new JsonModel([
                     'ok'    => false,
-                    'error' => 'USER_NOT_LOGGED_IN'
+                    'error' => 'USER_NOT_LOGGED_IN',
                 ]);
             }
 
             //
-            // 2) Extract user ID
+            // 2) Extract user ID – adapted to your User entity
             //
             $userId = null;
 
-            if (method_exists($user, 'getId')) {
+            // Your User entity in UserSessionManager uses ->need('uid')
+            if (method_exists($user, 'need')) {
+                $userId = $user->need('uid');
+            } elseif (method_exists($user, 'get')) {
+                // fallback, in case ->get('uid') is implemented
+                $userId = $user->get('uid');
+            } elseif (method_exists($user, 'getId')) {
                 $userId = $user->getId();
             } elseif (isset($user->id)) {
                 $userId = $user->id;
             }
 
-            if (!$userId) {
+            if (! $userId || ! is_numeric($userId)) {
                 return new JsonModel([
                     'ok'    => false,
                     'error' => 'USER_ID_NOT_AVAILABLE',
-                    'debug' => $user
                 ]);
             }
 
@@ -82,10 +91,10 @@ class InterestController extends AbstractActionController
             //
             $dateStr = $this->params()->fromPost('date');
 
-            if (!$dateStr || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
+            if (! $dateStr || ! preg_match('/^\d{4}-\d{2}-\d{2}$/', $dateStr)) {
                 return new JsonModel([
                     'ok'    => false,
-                    'error' => 'INVALID_DATE'
+                    'error' => 'INVALID_DATE',
                 ]);
             }
 
@@ -94,7 +103,7 @@ class InterestController extends AbstractActionController
             } catch (\Throwable $e) {
                 return new JsonModel([
                     'ok'    => false,
-                    'error' => 'INVALID_DATE'
+                    'error' => 'INVALID_DATE',
                 ]);
             }
 
@@ -108,14 +117,14 @@ class InterestController extends AbstractActionController
                 return new JsonModel([
                     'ok'      => false,
                     'error'   => 'DB_ADAPTER_ERROR',
-                    'message' => $e->getMessage()
+                    'message' => $e->getMessage(),
                 ]);
             }
 
             //
             // 5) Mail configuration
             //
-            $config = $serviceManager->get('Config');
+            $config  = $serviceManager->get('Config');
             $mailCfg = isset($config['mail']) ? $config['mail'] : [];
 
             $type = isset($mailCfg['type']) ? strtolower($mailCfg['type']) : 'sendmail';
@@ -130,12 +139,12 @@ class InterestController extends AbstractActionController
                     'port' => $port,
                 ];
 
-                if (!empty($mailCfg['user'])) {
+                if (! empty($mailCfg['user'])) {
                     $opt['connection_class'] = $mailCfg['auth'] ?? 'login';
 
                     $opt['connection_config'] = [
                         'username' => $mailCfg['user'],
-                        'password' => $mailCfg['pw'] ?? ''
+                        'password' => $mailCfg['pw'] ?? '',
                     ];
 
                     if ($type === 'smtp-tls') {
@@ -152,6 +161,7 @@ class InterestController extends AbstractActionController
             // 6) WhatsApp optional
             //
             $whatsApp = null;
+
             if ($serviceManager->has(WhatsAppService::class)) {
                 try {
                     $whatsApp = $serviceManager->get(WhatsAppService::class);
@@ -161,7 +171,7 @@ class InterestController extends AbstractActionController
             }
 
             //
-            // 7) Build the service manually 
+            // 7) Build the service manually
             //
             $bookingInterestService = new BookingInterestService(
                 $dbAdapter,
@@ -176,19 +186,18 @@ class InterestController extends AbstractActionController
             $bookingInterestService->registerInterest($userId, $date);
 
             return new JsonModel([
-                'ok' => true
+                'ok'      => true,
+                'user_id' => $userId,
+                'date'    => $date->format('Y-m-d'),
             ]);
-        }
-
-        catch (\Throwable $e) {
-
+        } catch (\Throwable $e) {
             // FINAL fallback
             return new JsonModel([
                 'ok'    => false,
                 'error' => 'UNCAUGHT_SERVER_EXCEPTION',
                 'msg'   => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
-                'type'  => get_class($e)
+                'type'  => get_class($e),
             ]);
         }
     }
