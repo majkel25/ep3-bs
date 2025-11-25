@@ -1,5 +1,5 @@
 <?php
-// michael test 2
+
 namespace Frontend\Controller;
 
 use Zend\Mvc\Controller\AbstractActionController;
@@ -8,12 +8,10 @@ use Zend\Db\Adapter\Adapter;
 use Zend\Mail\Transport\Sendmail;
 use Zend\Mail\Transport\Smtp;
 use Zend\Mail\Transport\SmtpOptions;
+
 use User\Manager\UserSessionManager;
 use Service\Service\BookingInterestService;
 use Service\Service\WhatsAppService;
-
-// Hard-include service to guarantee autoloading (matches original project style)
-require_once __DIR__ . '/../../../../Service/src/Service/BookingInterestService.php';
 
 class InterestController extends AbstractActionController
 {
@@ -74,12 +72,12 @@ class InterestController extends AbstractActionController
 
             /**
              * 3) Extract user ID
-             *    (this is the same logic that is working now – not changed)
+             *    (leave this exactly as it worked before)
              */
             $userId = null;
 
             if (method_exists($user, 'need')) {
-                // Your User entity uses ->need('uid') in UserSessionManager
+                // your User entity uses ->need('uid')
                 $userId = $user->need('uid');
             } elseif (method_exists($user, 'get')) {
                 $userId = $user->get('uid');
@@ -173,23 +171,33 @@ class InterestController extends AbstractActionController
                 try {
                     $whatsApp = $serviceManager->get(WhatsAppService::class);
                 } catch (\Throwable $e) {
-                    // if WhatsApp fails, we just ignore it and continue
+                    // ignore WhatsApp failures – they shouldn't kill the whole request
                     $whatsApp = null;
                 }
             }
 
             /**
              * 8) Build BookingInterestService
+             *    (if constructor signature doesn't match, we'll catch it below)
              */
-            $bookingInterestService = new BookingInterestService(
-                $dbAdapter,
-                $mailTransport,
-                $mailCfg,
-                $whatsApp
-            );
+            try {
+                $bookingInterestService = new BookingInterestService(
+                    $dbAdapter,
+                    $mailTransport,
+                    $mailCfg,
+                    $whatsApp
+                );
+            } catch (\Throwable $e) {
+                return new JsonModel([
+                    'ok'      => false,
+                    'error'   => 'CREATE_BOOKING_INTEREST_SERVICE_FAILED',
+                    'message' => $e->getMessage(),
+                    'type'    => get_class($e),
+                ]);
+            }
 
             /**
-             * 9) Register interest in DB (and send notifications)
+             * 9) Register interest in DB (and trigger notifications)
              */
             try {
                 $bookingInterestService->registerInterest($userId, $date);
@@ -203,7 +211,7 @@ class InterestController extends AbstractActionController
             }
 
             /**
-             * 10) Success JSON – frontend already expects just ok:true
+             * 10) Success JSON
              */
             return new JsonModel([
                 'ok'      => true,
@@ -211,7 +219,7 @@ class InterestController extends AbstractActionController
                 'date'    => $date->format('Y-m-d'),
             ]);
         } catch (\Throwable $e) {
-            // Final catch-all – still return JSON if anything unexpected happens
+            // final safety net: still JSON, not HTML
             return new JsonModel([
                 'ok'    => false,
                 'error' => 'UNCAUGHT_SERVER_EXCEPTION',
