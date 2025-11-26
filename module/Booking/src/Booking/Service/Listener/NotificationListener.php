@@ -2,19 +2,21 @@
 
 namespace Booking\Service\Listener;
 
+use Backend\Service\MailService as BackendMailService;
 use Base\Manager\OptionManager;
+use Base\View\Helper\DateRange;
+use Base\View\Helper\PriceFormatPlain;
+use Booking\Manager\Booking\BillManager;
 use Booking\Manager\ReservationManager;
 use Square\Manager\SquareManager;
 use User\Manager\UserManager;
 use User\Service\MailService as UserMailService;
-use Backend\Service\MailService as BackendMailService;
-use Service\Service\BookingInterestService;
 use Zend\EventManager\AbstractListenerAggregate;
 use Zend\EventManager\Event;
 use Zend\EventManager\EventManagerInterface;
 use Zend\I18n\Translator\TranslatorInterface;
-use Zend\View\Helper\DateFormat;
-use Zend\View\Helper\DateRange;
+use Zend\I18n\View\Helper\DateFormat;
+use Service\Service\BookingInterestService;
 
 /**
  * Sends booking / cancellation notifications to users and back-office,
@@ -63,7 +65,9 @@ class NotificationListener extends AbstractListenerAggregate
         DateFormat             $dateFormatHelper,
         DateRange              $dateRangeHelper,
         TranslatorInterface    $translator,
-        BookingInterestService $bookingInterestService
+        BookingInterestService $bookingInterestService,
+        BillManager            $bookingBillManager,
+        PriceFormatPlain       $priceFormatHelper
     ) {
         $this->optionManager          = $optionManager;
         $this->reservationManager     = $reservationManager;
@@ -74,6 +78,7 @@ class NotificationListener extends AbstractListenerAggregate
         $this->dateFormatHelper       = $dateFormatHelper;
         $this->dateRangeHelper        = $dateRangeHelper;
         $this->translator             = $translator;
+        $this->priceFormatHelper      = $priceFormatHelper;
         $this->bookingInterestService = $bookingInterestService;
     }
 
@@ -242,23 +247,21 @@ class NotificationListener extends AbstractListenerAggregate
             $this->backendMailService->send($backendSubject, $message, [], $addendum);
         }
 
-        // --- NEW: notify interested users watching this day ---
-
+        // Notify users who registered interest in this day
         try {
-            $bookingData = [
+            $bookingData = array(
                 'id'          => $booking->need('bid'),
                 'start'       => $reservationStart,
                 'end'         => $reservationEnd,
                 'square_name' => $square->need('name'),
-            ];
+            );
 
             $this->bookingInterestService->notifyCancellation($bookingData);
         } catch (\Throwable $e) {
-            // Fail silently – main cancellation must never break
-            // because of the optional interest feature.
-            // If you later add logging, this is the place for it.
+            // Do not break the main cancellation flow if interest notification fails.
+            // Optional: log this if you introduce logging later.
         }
-    }
+            
 
     /**
      * Small helper for translated strings.

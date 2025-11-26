@@ -3,6 +3,7 @@
 namespace Service;
 
 use Service\Service\WhatsAppService;
+use Service\Service\BookingInterestService;
 use Zend\EventManager\EventInterface;
 use Zend\ModuleManager\Feature\AutoloaderProviderInterface;
 use Zend\ModuleManager\Feature\BootstrapListenerInterface;
