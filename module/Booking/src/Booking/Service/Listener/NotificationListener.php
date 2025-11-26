@@ -96,6 +96,8 @@ class NotificationListener extends AbstractListenerAggregate
      */
     public function onCreateSingle(Event $event)
     {
+        error_log('NotificationListener::onCreateSingle fired');
+        
         $booking     = $event->getTarget();
         $reservation = current($booking->getExtra('reservations'));
 
