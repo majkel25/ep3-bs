@@ -13,7 +13,6 @@ class BookingServiceFactory implements FactoryInterface
      */
     public function createService(ServiceLocatorInterface $sm)
     {
-        // Create the core BookingService with all required dependencies
         $bookingService = new BookingService(
             $sm->get('Base\Manager\OptionManager'),
             $sm->get('Booking\Manager\BookingManager'),
@@ -24,12 +23,26 @@ class BookingServiceFactory implements FactoryInterface
             $sm->get('Zend\Db\Adapter\Adapter')->getDriver()->getConnection()
         );
 
-        /** @var EventManagerInterface $eventManager */
-        $eventManager = $bookingService->getEventManager();
+        // ----------------- DEBUG BLOCK START -----------------
+        try {
+            /** @var EventManagerInterface $eventManager */
+            $eventManager = $bookingService->getEventManager();
 
-        // This call MUST succeed – if it doesn’t, we want to see the error
-        $notificationListener = $sm->get('Booking\Service\Listener\NotificationListener');
-        $notificationListener->attach($eventManager);
+            /** @var \Booking\Service\Listener\NotificationListener $notificationListener */
+            $notificationListener = $sm->get('Booking\Service\Listener\NotificationListener');
+
+            // Attach the listener to the booking events
+            $notificationListener->attach($eventManager);
+
+        } catch (\Throwable $e) {
+            // TEMPORARY: dump the real error to the browser and stop.
+            header('Content-Type: text/plain; charset=utf-8');
+            echo "DEBUG: exception while attaching NotificationListener\n\n";
+            echo get_class($e) . ": " . $e->getMessage() . "\n\n";
+            echo $e->getTraceAsString();
+            exit;
+        }
+        // ----------------- DEBUG BLOCK END -------------------
 
         return $bookingService;
     }
