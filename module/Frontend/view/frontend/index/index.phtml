@@ -6,8 +6,16 @@ $this->headScript()->appendFile($this->basePath('js/controller/frontend/index.mi
 
 <div id="calendar-toolbar" class="no-print">
     <div id="calendar-toolbar-datepicker" class="panel">
-        <?= $this->partial('frontend/index/datepicker.phtml', ['dateStart' => $this->dateStart, 'dateNow' => $this->dateNow, 'squaresFilter' => $this->squaresFilter]) ?>
+        <?= $this->partial('frontend/index/datepicker.phtml', [
+            'dateStart'     => $this->dateStart,
+            'dateNow'       => $this->dateNow,
+            'squaresFilter' => $this->squaresFilter
+        ]) ?>
     </div>
+
+    <script type="text/javascript">
+        window.currentBookingDate = '<?= $this->escapeJs($this->dateNow->format('Y-m-d')); ?>';
+    </script>
 
     <div id="calendar-toolbar-userpanel" class="panel">
         <?php if ($this->user): ?>
@@ -18,6 +26,15 @@ $this->headScript()->appendFile($this->basePath('js/controller/frontend/index.mi
             <?= $this->partial('frontend/index/userpanel.offline.phtml') ?>
         <?php endif; ?>
     </div>
+</div>
+
+<div id="interest-date-dialog" title="Register interest" style="display:none;">
+    <p>Select the date you want to watch:</p>
+    <input type="text"
+           id="interest-date-input"
+           class="interest-date-input"
+           autocomplete="off"
+           style="width: 120px; text-align: center;" />
 </div>
 
 <?= $this->calendar ?>
