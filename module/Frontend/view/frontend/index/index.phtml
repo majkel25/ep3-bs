@@ -4,6 +4,43 @@ $this->headScript()->appendFile($this->basePath('js/controller/frontend/index.mi
 
 ?>
 
+<style>
+    /* Very small custom modal styling for the interest picker */
+    #interest-dialog-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.35);
+        z-index: 2050;
+        display: none;
+    }
+
+    #interest-date-dialog {
+        position: fixed;
+        top: 30%;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #fff;
+        padding: 16px 20px;
+        border-radius: 4px;
+        box-shadow: 0 0 10px rgba(0,0,0,.4);
+        z-index: 2051;
+        min-width: 260px;
+        display: none;
+    }
+
+    #interest-date-dialog .interest-dialog-buttons {
+        text-align: right;
+        margin-top: 12px;
+    }
+
+    #interest-date-dialog .interest-dialog-buttons .default-button {
+        margin-left: 8px;
+    }
+</style>
+
 <div id="calendar-toolbar" class="no-print">
     <div id="calendar-toolbar-datepicker" class="panel">
         <?= $this->partial('frontend/index/datepicker.phtml', [
@@ -28,13 +65,25 @@ $this->headScript()->appendFile($this->basePath('js/controller/frontend/index.mi
     </div>
 </div>
 
-<div id="interest-date-dialog" title="Register interest" style="display:none;">
+<!-- Overlay + dialog: now we will control these via JS without jQuery UI dialog() -->
+<div id="interest-dialog-overlay"></div>
+
+<div id="interest-date-dialog" title="Register interest">
     <p>Select the date you want to watch:</p>
     <input type="text"
            id="interest-date-input"
            class="interest-date-input"
            autocomplete="off"
            style="width: 120px; text-align: center;" />
+
+    <div class="interest-dialog-buttons">
+        <button type="button" id="interest-date-cancel" class="default-button">
+            <?= $this->t('Cancel') ?>
+        </button>
+        <button type="button" id="interest-date-ok" class="default-button">
+            <?= $this->t('OK') ?>
+        </button>
+    </div>
 </div>
 
 <?= $this->calendar ?>
