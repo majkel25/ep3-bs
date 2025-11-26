@@ -55,6 +55,12 @@ class NotificationListener extends AbstractListenerAggregate
     /** @var BookingInterestService */
     protected $bookingInterestService;
 
+    /** @var BillManager */
+    protected $bookingBillManager;
+
+    /** @var PriceFormatPlain */
+    protected $priceFormatHelper;
+
     public function __construct(
         OptionManager          $optionManager,
         ReservationManager     $reservationManager,
@@ -78,8 +84,9 @@ class NotificationListener extends AbstractListenerAggregate
         $this->dateFormatHelper       = $dateFormatHelper;
         $this->dateRangeHelper        = $dateRangeHelper;
         $this->translator             = $translator;
-        $this->priceFormatHelper      = $priceFormatHelper;
         $this->bookingInterestService = $bookingInterestService;
+        $this->bookingBillManager     = $bookingBillManager;
+        $this->priceFormatHelper      = $priceFormatHelper;
     }
 
     /**
@@ -87,17 +94,18 @@ class NotificationListener extends AbstractListenerAggregate
      */
     public function attach(EventManagerInterface $events)
     {
+        // IMPORTANT: these event names must match BookingService!
         $this->listeners[] = $events->attach('create.single', [$this, 'onCreateSingle']);
-        $this->listeners[] = $events->attach('cancel.single', [$this, 'onCancelSingle']);
+        $this->listeners[] = $events->attach('cancel.single',  [$this, 'onCancelSingle']);
     }
 
     /**
      * Booking has been created -> send confirmation.
+     *
+     * @param Event $event
      */
     public function onCreateSingle(Event $event)
     {
-        error_log('NotificationListener::onCreateSingle fired');
-        
         $booking     = $event->getTarget();
         $reservation = current($booking->getExtra('reservations'));
 
@@ -155,15 +163,15 @@ class NotificationListener extends AbstractListenerAggregate
             $message .= "\n" . $booking->getMeta('notes');
         }
 
-        // Send to user
-        if ($user->getMeta('notification.bookings', 'true') == 'true') {
+        // Send to user (this meta key is what the original app uses)
+        if ($user->getMeta('notification.bookings', 'true') === 'true') {
             $this->userMailService->send($user, $subject, $message);
         }
 
         // Send copy to back-office
         if ($this->optionManager->get('client.contact.email.user-notifications')) {
             $backendSubject = sprintf(
-                $this->t('%s\'s %s-booking for %s'),
+                $this->t("%s's %s-booking for %s"),
                 $user->need('alias'),
                 $this->optionManager->get('subject.square.type'),
                 $dateFormatHelper($reservationStart, \IntlDateFormatter::MEDIUM, \IntlDateFormatter::SHORT)
@@ -183,6 +191,8 @@ class NotificationListener extends AbstractListenerAggregate
      * Booking has been cancelled -> send cancellation mail
      * AND trigger BookingInterestService so that “watchers” of this
      * day can be notified.
+     *
+     * @param Event $event
      */
     public function onCancelSingle(Event $event)
     {
@@ -229,13 +239,13 @@ class NotificationListener extends AbstractListenerAggregate
             $dateRangeHelper($reservationStart, $reservationEnd)
         );
 
-        if ($user->getMeta('notification.bookings', 'true') == 'true') {
+        if ($user->getMeta('notification.bookings', 'true') === 'true') {
             $this->userMailService->send($user, $subject, $message);
         }
 
         if ($this->optionManager->get('client.contact.email.user-notifications')) {
             $backendSubject = sprintf(
-                $this->t('%s\'s %s-booking has been cancelled'),
+                $this->t("%s's %s-booking has been cancelled"),
                 $user->need('alias'),
                 $this->optionManager->get('subject.square.type')
             );
@@ -249,25 +259,28 @@ class NotificationListener extends AbstractListenerAggregate
             $this->backendMailService->send($backendSubject, $message, [], $addendum);
         }
 
-        // Notify users who registered interest in this day
+        // --- NEW: notify users who registered interest in this day ---
+
         try {
-            $bookingData = array(
+            $bookingData = [
                 'id'          => $booking->need('bid'),
                 'start'       => $reservationStart,
                 'end'         => $reservationEnd,
                 'square_name' => $square->need('name'),
-            );
-        
+            ];
+
             $this->bookingInterestService->notifyCancellation($bookingData);
         } catch (\Throwable $e) {
-            // Do not break the main cancellation flow if interest notification fails.
-            // Optional: log this if you introduce logging later.
+            // Do not break cancellation flow if interest notification fails.
+            // You can add logging here later if needed.
         }
-          
-        }
+    }
 
     /**
      * Small helper for translated strings.
+     *
+     * @param string $message
+     * @return string
      */
     protected function t($message)
     {
