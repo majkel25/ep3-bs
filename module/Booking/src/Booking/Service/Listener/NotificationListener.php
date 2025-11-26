@@ -97,6 +97,8 @@ class NotificationListener extends AbstractListenerAggregate
         // IMPORTANT: these event names must match BookingService!
         $this->listeners[] = $events->attach('create.single', [$this, 'onCreateSingle']);
         $this->listeners[] = $events->attach('cancel.single',  [$this, 'onCancelSingle']);
+
+        error_log('SSA: NotificationListener attached to create.single / cancel.single');
     }
 
     /**
@@ -106,10 +108,13 @@ class NotificationListener extends AbstractListenerAggregate
      */
     public function onCreateSingle(Event $event)
     {
+        error_log('SSA: onCreateSingle triggered');
+
         $booking     = $event->getTarget();
         $reservation = current($booking->getExtra('reservations'));
 
         if (! $reservation) {
+            error_log('SSA: onCreateSingle – no reservation found in booking extra');
             return;
         }
 
@@ -163,13 +168,23 @@ class NotificationListener extends AbstractListenerAggregate
             $message .= "\n" . $booking->getMeta('notes');
         }
 
-        // Send to user (this meta key is what the original app uses)
-        if ($user->getMeta('notification.bookings', 'true') === 'true') {
-            $this->userMailService->send($user, $subject, $message);
+        // ---- USER MAIL: on the clone, send ALWAYS if email present ----
+        if ($user->get('email')) {
+            error_log('SSA: about to send booking mail to user ' . $user->need('email'));
+
+            try {
+                $this->userMailService->send($user, $subject, $message);
+                error_log('SSA: booking mail sent OK to ' . $user->need('email'));
+            } catch (\Throwable $e) {
+                error_log('SSA: booking mail FAILED for ' . $user->need('email') . ' – ' . $e->getMessage());
+            }
+        } else {
+            error_log('SSA: user has no email on record, skipping mail');
         }
 
-        // Send copy to back-office
+        // ---- BACKEND MAIL (same condition as original app) ----
         if ($this->optionManager->get('client.contact.email.user-notifications')) {
+
             $backendSubject = sprintf(
                 $this->t("%s's %s-booking for %s"),
                 $user->need('alias'),
@@ -183,7 +198,12 @@ class NotificationListener extends AbstractListenerAggregate
                 $user->need('email')
             );
 
-            $this->backendMailService->send($backendSubject, $message, [], $addendum);
+            try {
+                $this->backendMailService->send($backendSubject, $message, [], $addendum);
+                error_log('SSA: backend booking mail sent OK');
+            } catch (\Throwable $e) {
+                error_log('SSA: backend booking mail FAILED – ' . $e->getMessage());
+            }
         }
     }
 
@@ -196,6 +216,8 @@ class NotificationListener extends AbstractListenerAggregate
      */
     public function onCancelSingle(Event $event)
     {
+        error_log('SSA: onCancelSingle triggered');
+
         $booking = $event->getTarget();
 
         // Load reservation again (we only need one, typical for SSA tables)
@@ -207,6 +229,7 @@ class NotificationListener extends AbstractListenerAggregate
         $reservation = current($reservations);
 
         if (! $reservation) {
+            error_log('SSA: onCancelSingle – no reservation found');
             return;
         }
 
@@ -239,8 +262,13 @@ class NotificationListener extends AbstractListenerAggregate
             $dateRangeHelper($reservationStart, $reservationEnd)
         );
 
-        if ($user->getMeta('notification.bookings', 'true') === 'true') {
-            $this->userMailService->send($user, $subject, $message);
+        if ($user->get('email')) {
+            try {
+                $this->userMailService->send($user, $subject, $message);
+                error_log('SSA: cancellation mail sent to ' . $user->need('email'));
+            } catch (\Throwable $e) {
+                error_log('SSA: cancellation mail FAILED for ' . $user->need('email') . ' – ' . $e->getMessage());
+            }
         }
 
         if ($this->optionManager->get('client.contact.email.user-notifications')) {
@@ -256,11 +284,15 @@ class NotificationListener extends AbstractListenerAggregate
                 $user->need('email')
             );
 
-            $this->backendMailService->send($backendSubject, $message, [], $addendum);
+            try {
+                $this->backendMailService->send($backendSubject, $message, [], $addendum);
+                error_log('SSA: backend cancellation mail sent OK');
+            } catch (\Throwable $e) {
+                error_log('SSA: backend cancellation mail FAILED – ' . $e->getMessage());
+            }
         }
 
         // --- NEW: notify users who registered interest in this day ---
-
         try {
             $bookingData = [
                 'id'          => $booking->need('bid'),
@@ -270,9 +302,9 @@ class NotificationListener extends AbstractListenerAggregate
             ];
 
             $this->bookingInterestService->notifyCancellation($bookingData);
+            error_log('SSA: BookingInterestService::notifyCancellation executed');
         } catch (\Throwable $e) {
-            // Do not break cancellation flow if interest notification fails.
-            // You can add logging here later if needed.
+            error_log('SSA: BookingInterestService notify FAILED – ' . $e->getMessage());
         }
     }
 
