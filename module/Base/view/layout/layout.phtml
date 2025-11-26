@@ -14,19 +14,18 @@
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
         <meta name="apple-mobile-web-app-title" content="<?= $this->option('service.name.full') ?>" />
 
-
-
-
         <link type="image/x-icon" rel="icon" href="<?= $this->basePath('imgs-client/icons/fav.ico') ?>">
         <link type="image/x-icon" rel="shortcut icon" href="<?= $this->basePath('imgs-client/icons/fav.ico') ?>">
+
+        <!-- jQuery UI theme CSS -->
         <link type="text/css" rel="stylesheet" href="<?= $this->basePath('css/jquery-ui/jquery-ui.min.css') ?>" media="all">
+
+        <!-- Main styles -->
         <link type="text/css" rel="stylesheet" href="<?= $this->basePath('css/default.min.css') ?>" media="all">
         <link type="text/css" rel="stylesheet" href="<?= $this->basePath('css-client/default.css') ?>" media="all">
+
         <?= $this->headLink() ?>
         <?= $this->headTitle($this->option(['client.name.short', 'service.name.full']))->setSeparator(' &middot; ')->setAutoEscape(false) ?>
-
-        <link rel="stylesheet" href="<?= $this->basePath('/css/jquery-ui.min.css') ?>">
-        <script src="<?= $this->basePath('/js/jquery-ui.min.js') ?>"></script>
     </head>
 
     <body>
@@ -38,14 +37,22 @@
                 <div id="label-service"><?= $this->option('service.name.full') ?></div>
 
                 <?php if ($this->option('service.branding', 'true') == 'true'): ?>
-                    <div id="branding">&raquo; <?= sprintf($this->t('Powered by %s'), '<a href="' . $this->option('service.branding.website') .'" target="_blank">' . $this->option('service.branding.name') . '</a>') ?></div>
+                    <div id="branding">
+                        &raquo;
+                        <?= sprintf(
+                            $this->t('Powered by %s'),
+                            '<a href="' . $this->option('service.branding.website') .'" target="_blank">' .
+                            $this->option('service.branding.name') .
+                            '</a>'
+                        ) ?>
+                    </div>
                 <?php else: ?>
                     <style type="text/css"> #label-client { margin-top: 15px; } </style>
                 <?php endif; ?>
             </div>
 
             <div id="topbar">
-<!--                --><?php //= $this->headerLocaleChoice() ?>
+                <!-- <?= '// ' . $this->headerLocaleChoice() ?> -->
 
                 <div id="topbar-contact" class="responsive-pass-1">
                     <p>
@@ -79,9 +86,6 @@
                         </span>
                     </p>
                 </div>
-
-
-
             </div>
         </div>
 
@@ -99,17 +103,29 @@
 
         <div id="footer">
             <div class="centered-text">
-                <span class="no-wrap">&copy; <?= date('Y') ?> <a href="<?= $this->option('client.website') ?>"><?= $this->option('client.name.full') ?></a></span>
-                (<a href="<?= $this->option('client.website.imprint') ?>"><?= $this->t('Imprint') ?></a><?php if ($this->option('client.website.privacy')): ?> &ndash; <a href="<?= $this->option('client.website.privacy') ?>"><?= $this->t('Privacy') ?></a><?php endif; ?>)
-                <span class="no-wrap">&amp; <a href="<?= $this->option('service.branding.website') ?>"><?= $this->option('service.branding.name') ?></a> (<?= $this->t('Software') ?>)</span>
+                <span class="no-wrap">
+                    &copy; <?= date('Y') ?>
+                    <a href="<?= $this->option('client.website') ?>"><?= $this->option('client.name.full') ?></a>
+                </span>
+                (
+                    <a href="<?= $this->option('client.website.imprint') ?>"><?= $this->t('Imprint') ?></a>
+                    <?php if ($this->option('client.website.privacy')): ?>
+                        &ndash;
+                        <a href="<?= $this->option('client.website.privacy') ?>"><?= $this->t('Privacy') ?></a>
+                    <?php endif; ?>
+                )
+                <span class="no-wrap">
+                    &amp;
+                    <a href="<?= $this->option('service.branding.website') ?>"><?= $this->option('service.branding.name') ?></a>
+                    (<?= $this->t('Software') ?>)
+                </span>
             </div>
         </div>
 
+        <!-- JS: jQuery, jQuery UI, default, then per-page scripts -->
         <script type="text/javascript" src="<?= $this->basePath('js/jquery/jquery.min.js') ?>"></script>
         <script type="text/javascript" src="<?= $this->basePath('js/jquery-ui/jquery-ui.min.js') ?>"></script>
         <script type="text/javascript" src="<?= $this->basePath('js/default.min.js') ?>"></script>
         <?= $this->headScript() ?>
-
-
     </body>
 </html>
