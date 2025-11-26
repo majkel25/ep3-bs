@@ -25,16 +25,17 @@ class BookingServiceFactory implements FactoryInterface
             $sm->get('Zend\Db\Adapter\Adapter')->getDriver()->getConnection()
         );
 
-        // Try to attach the notification listener, but NEVER let this
-        // block creation of the BookingService itself.
+        // Attach the NotificationListener, but never let failures kill the service
         try {
             /** @var EventManagerInterface $eventManager */
             $eventManager = $bookingService->getEventManager();
 
+            /** @var \Booking\Service\Listener\NotificationListener $notificationListener */
             $notificationListener = $sm->get('Booking\Service\Listener\NotificationListener');
 
-            // Attach listener to the booking events
-            $eventManager->attach($notificationListener);
+            // IMPORTANT: for AbstractListenerAggregate you call attach() ON the listener:
+            $notificationListener->attach($eventManager);
+
         } catch (Throwable $e) {
             // If anything goes wrong with the listener, we simply skip it.
             // You can later add logging here if you want to inspect $e.
