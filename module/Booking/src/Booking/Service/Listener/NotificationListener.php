@@ -20,7 +20,7 @@ use Service\Service\BookingInterestService;
 
 /**
  * Sends booking / cancellation notifications to users and back-office,
- * and (on cancellation) triggers BookingInterestService so that users
+ * and (on cancellation) can trigger BookingInterestService so that users
  * who “watch” a day can be notified about freed slots.
  */
 class NotificationListener extends AbstractListenerAggregate
@@ -52,13 +52,13 @@ class NotificationListener extends AbstractListenerAggregate
     /** @var TranslatorInterface */
     protected $translator;
 
-    /** @var BookingInterestService */
+    /** @var BookingInterestService|null */
     protected $bookingInterestService;
 
-    /** @var BillManager */
+    /** @var BillManager|null */
     protected $bookingBillManager;
 
-    /** @var PriceFormatPlain */
+    /** @var PriceFormatPlain|null */
     protected $priceFormatHelper;
 
     public function __construct(
@@ -71,9 +71,9 @@ class NotificationListener extends AbstractListenerAggregate
         DateFormat             $dateFormatHelper,
         DateRange              $dateRangeHelper,
         TranslatorInterface    $translator,
-        BookingInterestService $bookingInterestService,
-        BillManager            $bookingBillManager,
-        PriceFormatPlain       $priceFormatHelper
+        ?BookingInterestService $bookingInterestService = null,
+        ?BillManager           $bookingBillManager = null,
+        ?PriceFormatPlain      $priceFormatHelper = null
     ) {
         $this->optionManager          = $optionManager;
         $this->reservationManager     = $reservationManager;
@@ -94,7 +94,6 @@ class NotificationListener extends AbstractListenerAggregate
      */
     public function attach(EventManagerInterface $events)
     {
-        // IMPORTANT: these event names must match BookingService!
         $this->listeners[] = $events->attach('create.single', [$this, 'onCreateSingle']);
         $this->listeners[] = $events->attach('cancel.single',  [$this, 'onCancelSingle']);
 
@@ -168,7 +167,7 @@ class NotificationListener extends AbstractListenerAggregate
             $message .= "\n" . $booking->getMeta('notes');
         }
 
-        // ---- USER MAIL: on the clone, send ALWAYS if email present ----
+        // USER MAIL – on clone, send if email exists
         if ($user->get('email')) {
             error_log('SSA: about to send booking mail to user ' . $user->need('email'));
 
@@ -182,7 +181,7 @@ class NotificationListener extends AbstractListenerAggregate
             error_log('SSA: user has no email on record, skipping mail');
         }
 
-        // ---- BACKEND MAIL (same condition as original app) ----
+        // BACKEND MAIL
         if ($this->optionManager->get('client.contact.email.user-notifications')) {
 
             $backendSubject = sprintf(
@@ -209,8 +208,7 @@ class NotificationListener extends AbstractListenerAggregate
 
     /**
      * Booking has been cancelled -> send cancellation mail
-     * AND trigger BookingInterestService so that “watchers” of this
-     * day can be notified.
+     * AND, if available, trigger BookingInterestService.
      *
      * @param Event $event
      */
@@ -293,18 +291,20 @@ class NotificationListener extends AbstractListenerAggregate
         }
 
         // --- NEW: notify users who registered interest in this day ---
-        try {
-            $bookingData = [
-                'id'          => $booking->need('bid'),
-                'start'       => $reservationStart,
-                'end'         => $reservationEnd,
-                'square_name' => $square->need('name'),
-            ];
+        if ($this->bookingInterestService) {
+            try {
+                $bookingData = [
+                    'id'          => $booking->need('bid'),
+                    'start'       => $reservationStart,
+                    'end'         => $reservationEnd,
+                    'square_name' => $square->need('name'),
+                ];
 
-            $this->bookingInterestService->notifyCancellation($bookingData);
-            error_log('SSA: BookingInterestService::notifyCancellation executed');
-        } catch (\Throwable $e) {
-            error_log('SSA: BookingInterestService notify FAILED – ' . $e->getMessage());
+                $this->bookingInterestService->notifyCancellation($bookingData);
+                error_log('SSA: BookingInterestService::notifyCancellation executed');
+            } catch (\Throwable $e) {
+                error_log('SSA: BookingInterestService notify FAILED – ' . $e->getMessage());
+            }
         }
     }
 
