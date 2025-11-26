@@ -167,32 +167,52 @@ $this->headScript()->appendFile($this->basePath('js/controller/user/settings.min
             <div class="edit-panel">
                 <div class="separator-small"></div>
 
-                <?php
+  <?php
 
-                $form = $this->editNotificationsForm;
-                $form->setAttribute('method', 'post');
-                $form->setAttribute('action', $this->url('user/settings', array(), array('query' => array('edit' => 'notifications'))));
-                $form->prepare();
+            $form = $this->editNotificationsForm;
+            $form->setAttribute('method', 'post');
+            $form->setAttribute(
+                'action',
+                $this->url('user/settings', array(), array('query' => array('edit' => 'notifications')))
+            );
+            $form->prepare();
 
-                echo $this->form()->openTag($form);
+            echo $this->form()->openTag($form);
 
-                ?>
+            ?>
 
-                <table class="default-table" style="margin: 0px;">
-                    <tr>
-                        <td>
-                            <?= $this->formElement($form->get('enf-booking-notifications')) ?>
-                            <?= $this->formLabel($form->get('enf-booking-notifications')) ?>
-                            <?= $this->formElementErrors($form->get('enf-booking-notifications')) ?>
-                            <?= $this->formElementNotes($form->get('enf-booking-notifications')) ?>
-                        </td>
-                        <td>
-                            <?= $this->formElement($form->get('enf-submit')) ?>
-                        </td>
-                    </tr>
-                </table>
+            <table class="default-table" style="margin: 0px;">
+                <tr>
+                    <td>
+                        <!-- existing: booking confirmations -->
+                        <?= $this->formElement($form->get('enf-booking-notifications')) ?>
+                        <?= $this->formLabel($form->get('enf-booking-notifications')) ?>
+                        <?= $this->formElementErrors($form->get('enf-booking-notifications')) ?>
+                        <?= $this->formElementNotes($form->get('enf-booking-notifications')) ?>
 
-                <?= $this->form()->closeTag() ?>
+                        <div class="separator-small"></div>
+
+                        <!-- NEW: cancellations – email -->
+                        <?= $this->formElement($form->get('enf-cancel-email')) ?>
+                        <?= $this->formLabel($form->get('enf-cancel-email')) ?>
+                        <?= $this->formElementErrors($form->get('enf-cancel-email')) ?>
+                        <?= $this->formElementNotes($form->get('enf-cancel-email')) ?>
+
+                        <div class="separator-small"></div>
+
+                        <!-- NEW: cancellations – SMS / WhatsApp -->
+                        <?= $this->formElement($form->get('enf-cancel-whatsapp')) ?>
+                        <?= $this->formLabel($form->get('enf-cancel-whatsapp')) ?>
+                        <?= $this->formElementErrors($form->get('enf-cancel-whatsapp')) ?>
+                        <?= $this->formElementNotes($form->get('enf-cancel-whatsapp')) ?>
+                    </td>
+                    <td style="vertical-align: top;">
+                        <?= $this->formElement($form->get('enf-submit')) ?>
+                    </td>
+                </tr>
+            </table>
+
+            <?= $this->form()->closeTag() ?>               
             </div>
         </div>
     </div>

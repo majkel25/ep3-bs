@@ -509,9 +509,23 @@ class AccountController extends AbstractActionController
             if ($editNotificationsForm->isValid()) {
                 $data = $editNotificationsForm->getData();
 
+                // existing booking confirmations flag stored in meta
                 $bookingNotifications = $data['enf-booking-notifications'];
-
                 $user->setMeta('notification.bookings', $bookingNotifications);
+
+                // NEW: cancellation notifications flags stored in bs_users
+                $notifyCancelEmail = (
+                    isset($data['enf-cancel-email']) &&
+                    $data['enf-cancel-email'] === 'true'
+                ) ? 1 : 0;
+
+                $notifyCancelWhatsapp = (
+                    isset($data['enf-cancel-whatsapp']) &&
+                    $data['enf-cancel-whatsapp'] === 'true'
+                ) ? 1 : 0;
+
+                $user->set('notify_cancel_email', $notifyCancelEmail);
+                $user->set('notify_cancel_whatsapp', $notifyCancelWhatsapp);
 
                 $userManager->save($user);
 
@@ -521,7 +535,15 @@ class AccountController extends AbstractActionController
                 return $this->redirect()->toRoute('user/settings');
             }
         } else {
-            $editNotificationsForm->get('enf-booking-notifications')->setValue($user->getMeta('notification.bookings', 'true'));
+            $editNotificationsForm->get('enf-booking-notifications')
+                ->setValue($user->getMeta('notification.bookings', 'true'));
+
+            // NEW: pre-fill new checkboxes from bs_users columns
+            $editNotificationsForm->get('enf-cancel-email')
+                ->setValue($user->get('notify_cancel_email', 1) ? 'true' : 'false');
+
+            $editNotificationsForm->get('enf-cancel-whatsapp')
+                ->setValue($user->get('notify_cancel_whatsapp', 0) ? 'true' : 'false');
         }
 
         /* Password form */

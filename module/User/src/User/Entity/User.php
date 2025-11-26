@@ -11,6 +11,8 @@ class User extends AbstractEntity
     protected $alias;
     protected $status;
     protected $email;
+    protected $notify_cancel_email;
+    protected $notify_cancel_whatsapp;
     protected $pw;
     protected $login_attempts;
     protected $login_detent;
@@ -28,19 +30,75 @@ class User extends AbstractEntity
         'deleted' => 'Deleted user',
         'blocked' => 'Blocked user',
         'disabled' => 'Waiting for activation',
-        'enabled' => 'Enabled user',
-        'assist' => 'Assist',
-        'admin' => 'Admin',
+        'enabled' => 'Enabled',
     );
 
     /**
-     * Returns the status string.
+     * The possible gender options.
+     *
+     * @var array
+     */
+    public static $genderOptions = array(
+        'm' => 'Mr.',
+        'f' => 'Ms.',
+    );
+
+    /**
+     * Creates a new user object.
+     *
+     * @param array $data
+     * @param array $meta
+     */
+    public function __construct(array $data = array(), array $meta = array())
+    {
+        $this->primary = 'uid';
+
+        $this->populate($data);
+        $this->populateMeta($meta);
+    }
+
+    /**
+     * Populates an entity with data.
+     *
+     * @param array $data
+     */
+    public function populate(array $data = array())
+    {
+        foreach ($data as $property => $value) {
+            $this->set($property, $value, false, false);
+        }
+
+        $this->reset();
+    }
+
+    /**
+     * Populates meta data.
+     *
+     * @param array $meta
+     */
+    public function populateMeta(array $meta = array())
+    {
+        foreach ($meta as $property => $value) {
+            $this->setMeta($property, $value, false);
+        }
+
+        $this->reset();
+    }
+
+    /**
+     * Gets the status label.
+     *
+     * @param string $default
      *
      * @return string
      */
-    public function getStatus()
+    public function getStatusLabel($default = null)
     {
-        $status = $this->need('status');
+        $status = $this->get('status');
+
+        if (is_null($status)) {
+            return $default;
+        }
 
         if (isset(self::$statusOptions[$status])) {
             return self::$statusOptions[$status];
@@ -50,19 +108,9 @@ class User extends AbstractEntity
     }
 
     /**
-     * The possible gender options.
+     * Gets the gender label.
      *
-     * @var array
-     */
-    public static $genderOptions = array(
-        'male' => 'Mr.',
-        'female' => 'Mrs',
-        'family' => 'Family',
-        'firm' => 'Firm',
-    );
-
-    /**
-     * Returns the gender string.
+     * @param string $default
      *
      * @return string
      */
@@ -82,6 +130,58 @@ class User extends AbstractEntity
     }
 
     /**
+     * Gets the display name.
+     *
+     * @param string $default
+     *
+     * @return string
+     */
+    public function getDisplayName($default = null)
+    {
+        $firstname = $this->getMeta('firstname');
+        $lastname = $this->getMeta('lastname');
+
+        if ($firstname || $lastname) {
+            return trim($firstname . ' ' . $lastname);
+        }
+
+        $name = $this->getMeta('name');
+
+        if ($name) {
+            return $name;
+        }
+
+        $alias = $this->get('alias');
+
+        if ($alias) {
+            return $alias;
+        }
+
+        return $default;
+    }
+
+    /**
+     * Gets the display name with gender.
+     *
+     * @param string $default
+     *
+     * @return string
+     */
+    public function getDisplayNameWithGender($default = null)
+    {
+        $gender = $this->getGender();
+        $displayName = $this->getDisplayName();
+
+        if ($displayName && $gender) {
+            return sprintf('%s %s', $gender, $displayName);
+        } else if ($displayName) {
+            return $displayName;
+        }
+
+        return $default;
+    }
+
+    /**
      * The possible privileges.
      *
      * @var array
@@ -92,50 +192,57 @@ class User extends AbstractEntity
         'admin.event' => 'May manage events',
         'admin.config' => 'May change configuration',
         'admin.see-menu' => 'Can see the admin menu',
-        'calendar.see-past' => 'Can see the past in calendar',
-        'calendar.see-data' => 'Can see names and data in calendar',
-        'calendar.create-single-bookings' => 'May create single bookings',
-        'calendar.cancel-single-bookings' => 'May cancel single bookings',
-        'calendar.delete-single-bookings' => 'May delete single bookings',
-        'calendar.create-subscription-bookings' => 'May create multiple bookings',
-        'calendar.cancel-subscription-bookings' => 'May cancel multiple bookings',
-        'calendar.delete-subscription-bookings' => 'May delete multiple bookings',
+        'calendar.see-past' => 'Can see the past in the calendar',
+        'calendar.see-future' => 'Can see the future in the calendar',
+        'calendar.see-user' => 'Can see other user\'s bookings in the calendar',
+        'calendar.limit-past' => 'Can not create bookings in the past',
+        'calendar.limit-future' => 'Can not create bookings in the future',
+        'booking.create' => 'May create bookings',
+        'booking.update' => 'May update bookings',
+        'booking.delete.own' => 'May delete own bookings',
+        'booking.delete.all' => 'May delete all bookings',
+        'booking.create.own' => 'May only create own bookings',
+        'booking.update.own' => 'May only update own bookings',
+        'booking.update.time' => 'May update booking times',
+        'booking.update.past' => 'May update past bookings',
+        'booking.update.future' => 'May update future bookings',
+        'booking.update.all' => 'May update all bookings',
     );
 
     /**
-     * Access control for this user.
+     * Checks whether a user has a privilege.
      *
-     * @param string $privileges
+     * @param string|array $privileges
+     *
      * @return boolean
      */
-    public function can($privileges)
+    public function hasPrivilege($privileges)
     {
-        if ($this->need('status') == 'admin') {
-            return true;
+        $userPrivileges = $this->getMeta('privileges', array());
+
+        if (! is_array($userPrivileges)) {
+            $userPrivileges = array($userPrivileges);
         }
 
-        if ($this->need('status') == 'assist') {
-            if (is_array($privileges)) {
-                $privileges = implode(',', $privileges);
+        if (is_string($privileges)) {
+            $privileges = array($privileges);
+        }
+
+        if (! is_array($privileges)) {
+            return false;
+        }
+
+        foreach ($privileges as $privilege) {
+            if (isset($userPrivileges[$privilege]) && $userPrivileges[$privilege]) {
+                return true;
             }
 
-            if (is_string($privileges)) {
-                $orPrivileges = explode(',', $privileges);
+            if (strpos($privilege, '||') !== false) {
+                $orPrivileges = explode('||', $privilege);
                 $orPrivilegesMatched = 0;
 
                 foreach ($orPrivileges as $orPrivilege) {
-                    $andPrivileges = explode('+', $orPrivilege);
-                    $andPrivilegesMatched = 0;
-
-                    foreach ($andPrivileges as $andPrivilege) {
-                        $privilege = trim($andPrivilege);
-
-                        if ($this->getMeta('allow.' . $privilege) == 'true') {
-                            $andPrivilegesMatched++;
-                        }
-                    }
-
-                    if ($andPrivilegesMatched == count($andPrivileges)) {
+                    if (isset($userPrivileges[$orPrivilege]) && $userPrivileges[$orPrivilege]) {
                         $orPrivilegesMatched++;
                     }
                 }

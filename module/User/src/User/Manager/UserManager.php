@@ -57,6 +57,9 @@ class UserManager extends AbstractManager
             'alias' => $alias,
             'status' => $status,
             'email' => $email,
+            // default cancellation notification preferences for new users
+            'notify_cancel_email' => 1,
+            'notify_cancel_whatsapp' => 0,
             'pw' => $bcrypt->create($pw),
         ), $meta);
 
@@ -148,6 +151,8 @@ class UserManager extends AbstractManager
                     'alias' => $user->need('alias'),
                     'status' => $user->need('status'),
                     'email' => $user->get('email'),
+                    'notify_cancel_email' => $user->get('notify_cancel_email', 1),
+                    'notify_cancel_whatsapp' => $user->get('notify_cancel_whatsapp', 0),
                     'pw' => $user->get('pw'),
                     'login_attempts' => $user->get('login_attempts'),
                     'login_detent' => $user->get('login_detent'),
