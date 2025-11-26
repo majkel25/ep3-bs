@@ -24,6 +24,9 @@
         <link type="text/css" rel="stylesheet" href="<?= $this->basePath('css-client/default.css') ?>" media="all">
         <?= $this->headLink() ?>
         <?= $this->headTitle($this->option(['client.name.short', 'service.name.full']))->setSeparator(' &middot; ')->setAutoEscape(false) ?>
+
+        <link rel="stylesheet" href="<?= $this->basePath('/css/jquery-ui.min.css') ?>">
+        <script src="<?= $this->basePath('/js/jquery-ui.min.js') ?>"></script>
     </head>
 
     <body>
