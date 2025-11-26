@@ -5,7 +5,6 @@ namespace Booking\Service;
 use Zend\ServiceManager\FactoryInterface;
 use Zend\ServiceManager\ServiceLocatorInterface;
 use Zend\EventManager\EventManagerInterface;
-use Throwable;
 
 class BookingServiceFactory implements FactoryInterface
 {
@@ -14,6 +13,7 @@ class BookingServiceFactory implements FactoryInterface
      */
     public function createService(ServiceLocatorInterface $sm)
     {
+        // Create the core BookingService with all required dependencies
         $bookingService = new BookingService(
             $sm->get('Base\Manager\OptionManager'),
             $sm->get('Booking\Manager\BookingManager'),
@@ -24,21 +24,12 @@ class BookingServiceFactory implements FactoryInterface
             $sm->get('Zend\Db\Adapter\Adapter')->getDriver()->getConnection()
         );
 
-        try {
-            /** @var EventManagerInterface $eventManager */
-            $eventManager = $bookingService->getEventManager();
+        /** @var EventManagerInterface $eventManager */
+        $eventManager = $bookingService->getEventManager();
 
-            /** @var \Booking\Service\Listener\NotificationListener $notificationListener */
-            $notificationListener = $sm->get('Booking\Service\Listener\NotificationListener');
-
-            // IMPORTANT: call attach() ON the listener
-            $notificationListener->attach($eventManager);
-
-            error_log('SSA: BookingServiceFactory attached NotificationListener');
-
-        } catch (Throwable $e) {
-            error_log('SSA: BookingServiceFactory could not attach NotificationListener: ' . $e->getMessage());
-        }
+        // This call MUST succeed – if it doesn’t, we want to see the error
+        $notificationListener = $sm->get('Booking\Service\Listener\NotificationListener');
+        $notificationListener->attach($eventManager);
 
         return $bookingService;
     }
