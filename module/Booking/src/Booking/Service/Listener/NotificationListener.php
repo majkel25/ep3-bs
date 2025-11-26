@@ -255,13 +255,14 @@ class NotificationListener extends AbstractListenerAggregate
                 'end'         => $reservationEnd,
                 'square_name' => $square->need('name'),
             );
-        }
+        
             $this->bookingInterestService->notifyCancellation($bookingData);
         } catch (\Throwable $e) {
             // Do not break the main cancellation flow if interest notification fails.
             // Optional: log this if you introduce logging later.
         }
-            
+          
+        }
 
     /**
      * Small helper for translated strings.
