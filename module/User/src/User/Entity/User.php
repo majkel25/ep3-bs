@@ -256,4 +256,46 @@ class User extends AbstractEntity
         return false;
     }
 
+     public function can($privileges)
+    {
+        // Admin can do everything
+        if ($this->need('status') == 'admin') {
+            return true;
+        }
+
+        // Assist users use meta flags allow.<privilege>
+        if ($this->need('status') == 'assist') {
+            if (is_array($privileges)) {
+                $privileges = implode(',', $privileges);
+            }
+
+            if (is_string($privileges)) {
+                $orPrivileges = explode(',', $privileges);
+                $orPrivilegesMatched = 0;
+
+                foreach ($orPrivileges as $orPrivilege) {
+                    $andPrivileges = explode('+', $orPrivilege);
+                    $andPrivilegesMatched = 0;
+
+                    foreach ($andPrivileges as $andPrivilege) {
+                        $privilege = trim($andPrivilege);
+
+                        if ($this->getMeta('allow.' . $privilege) == 'true') {
+                            $andPrivilegesMatched++;
+                        }
+                    }
+
+                    if ($andPrivilegesMatched == count($andPrivileges)) {
+                        $orPrivilegesMatched++;
+                    }
+                }
+
+                if ($orPrivilegesMatched >= 1) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 }
