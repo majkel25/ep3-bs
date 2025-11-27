@@ -46,17 +46,12 @@ class NotificationListenerFactory implements FactoryInterface
 
         // Booking interest service (TRULY optional)
         /** @var BookingInterestService|null $bookingInterestService */
-        $bookingInterestService = null;
-        try {
-            // Uses the imported class name; resolves to "Service\Service\BookingInterestService"
-            $bookingInterestService = $sm->get(BookingInterestService::class);
-        } catch (\Exception $e) {
-            // Do NOT break booking creation if this service is missing/misconfigured
-            error_log(
-                'SSA NotificationListenerFactory: BookingInterestService not available: ' .
-                $e->getMessage()
-            );
-        }
+       $bookingInterestService = null;
+       try {
+            $bookingInterestService = $sm->get(Service\Service\BookingInterestService::class);
+       } catch (\Exception $e) {
+            error_log("BookingInterestService unavailable: " . $e->getMessage());
+       }
 
         return new NotificationListener(
             $optionManager,
