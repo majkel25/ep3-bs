@@ -293,6 +293,8 @@ class NotificationListener extends AbstractListenerAggregate
         // --- NEW: notify users who registered interest in this day ---
         if ($this->bookingInterestService) {
             try {
+                error_log('SSA cancel.single: calling BookingInterestService::notifyCancellation for booking ' . $booking->need('bid'));
+
                 $bookingData = [
                     'id'          => $booking->need('bid'),
                     'start'       => $reservationStart,
@@ -304,6 +306,9 @@ class NotificationListener extends AbstractListenerAggregate
                 error_log('SSA: BookingInterestService::notifyCancellation executed');
             } catch (\Throwable $e) {
                 error_log('SSA: BookingInterestService notify FAILED – ' . $e->getMessage());
+            }
+            } else {
+            error_log('SSA cancel.single: bookingInterestService is NULL');
             }
         }
     }
