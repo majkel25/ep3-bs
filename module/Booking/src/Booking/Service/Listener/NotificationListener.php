@@ -62,18 +62,18 @@ class NotificationListener extends AbstractListenerAggregate
     protected $priceFormatHelper;
 
     public function __construct(
-        OptionManager          $optionManager,
-        ReservationManager     $reservationManager,
-        SquareManager          $squareManager,
-        UserManager            $userManager,
-        UserMailService        $userMailService,
-        BackendMailService     $backendMailService,
-        DateFormat             $dateFormatHelper,
-        DateRange              $dateRangeHelper,
-        TranslatorInterface    $translator,
+        OptionManager           $optionManager,
+        ReservationManager      $reservationManager,
+        SquareManager           $squareManager,
+        UserManager             $userManager,
+        UserMailService         $userMailService,
+        BackendMailService      $backendMailService,
+        DateFormat              $dateFormatHelper,
+        DateRange               $dateRangeHelper,
+        TranslatorInterface     $translator,
         ?BookingInterestService $bookingInterestService = null,
-        ?BillManager           $bookingBillManager = null,
-        ?PriceFormatPlain      $priceFormatHelper = null
+        ?BillManager            $bookingBillManager = null,
+        ?PriceFormatPlain       $priceFormatHelper = null
     ) {
         $this->optionManager          = $optionManager;
         $this->reservationManager     = $reservationManager;
@@ -307,9 +307,8 @@ class NotificationListener extends AbstractListenerAggregate
             } catch (\Throwable $e) {
                 error_log('SSA: BookingInterestService notify FAILED – ' . $e->getMessage());
             }
-            } else {
+        } else {
             error_log('SSA cancel.single: bookingInterestService is NULL');
-            }
         }
     }
 
