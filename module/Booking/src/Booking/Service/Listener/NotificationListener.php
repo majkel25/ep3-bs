@@ -186,7 +186,7 @@ class NotificationListener extends AbstractListenerAggregate
     public function onCancelSingle(Event $event)
     {
         //Temoprary debug addition:
-        error_log("DEBUG: NotificationListener - Interest service = " . get_class($this->bookingInterestService));
+        //error_log("DEBUG: NotificationListener - Interest service = " . get_class($this->bookingInterestService));
 
     
         $booking      = $event->getTarget();
