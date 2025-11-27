@@ -20,17 +20,14 @@ use Zend\ServiceManager\ServiceLocatorInterface;
 class NotificationListenerFactory implements FactoryInterface
 {
     /**
-     * ZF2 factory – builds NotificationListener with all dependencies,
-     * including BookingInterestService.
+     * ZF2-style factory; ServiceManager calls this to build the listener.
      *
      * @param ServiceLocatorInterface $serviceLocator
      * @return NotificationListener
      */
     public function createService(ServiceLocatorInterface $serviceLocator)
     {
-        // On this project the main ServiceManager is passed directly,
-        // so no need to unwrap; but keep a variable for clarity.
-        $sm = $serviceLocator;
+        $sm = $serviceLocator; // main service manager
 
         /** @var OptionManager $optionManager */
         $optionManager = $sm->get('Base\Manager\OptionManager');
@@ -69,13 +66,14 @@ class NotificationListenerFactory implements FactoryInterface
         /** @var PriceFormatPlain|null $priceFormatHelper */
         $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
 
-        // NEW: wire BookingInterestService
+        // NEW: BookingInterestService is optional
         /** @var BookingInterestService|null $bookingInterestService */
         $bookingInterestService = null;
         if ($sm->has(BookingInterestService::class)) {
             $bookingInterestService = $sm->get(BookingInterestService::class);
         }
 
+        // IMPORTANT: always return a NotificationListener instance
         return new NotificationListener(
             $optionManager,
             $reservationManager,
