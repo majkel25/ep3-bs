@@ -39,11 +39,11 @@ class Module implements AutoloaderProviderInterface, BootstrapListenerInterface,
                 // BookingInterestService – used by InterestController
                 //\Service\Service\BookingInterestService::class =>
                 //    \Service\Factory\BookingInterestServiceFactory::class,
-                //BookingInterestService::class => \Service\Factory\BookingInterestServiceFactory::class,
+                BookingInterestService::class => \Service\Factory\BookingInterestServiceFactory::class,
                 
                 
-                Service\Service\BookingInterestService::class =>
-                Service\Factory\BookingInterestServiceFactory::class,
+                //Service\Service\BookingInterestService::class =>
+               // Service\Factory\BookingInterestServiceFactory::class,
 
             ),
         );
