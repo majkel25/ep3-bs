@@ -149,18 +149,20 @@ class NotificationListener extends AbstractListenerAggregate
         }
 
         if ($user->getMeta('notification.bookings', 'true') == 'true') {
-            $icsData = $vCalendar->render();
-            $icsFile = tempnam(sys_get_temp_dir(), 'booking');
-            file_put_contents($icsFile, $icsData);
+            $attachments = [
+                'booking.ics' => [
+                    'name'    => 'booking.ics',
+                    'type'    => 'text/calendar',
+                    'content' => $vCalendar->render(),
+                ],
+            ];
 
             $this->userMailService->send(
-                $user,
-                $subject,
-                $message,
-                array($icsFile => 'booking.ics')
+                $user, 
+                $subject, 
+                $message, 
+                $attachments
             );
-
-            @unlink($icsFile);
         }
 
 	    if ($this->optionManager->get('client.contact.email.user-notifications')) {
