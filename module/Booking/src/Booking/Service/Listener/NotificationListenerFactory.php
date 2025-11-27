@@ -14,27 +14,57 @@ use Square\Manager\SquareManager;
 use User\Manager\UserManager;
 use User\Service\MailService as UserMailService;
 use Zend\I18n\Translator\TranslatorInterface;
-use Zend\I18n\View\Helper\DateFormat;
-use Zend\ServiceManager\FactoryInterface;
+use Zend\ServiceManager\Factory\FactoryInterface as V3FactoryInterface;
+use Zend\ServiceManager\FactoryInterface as V2FactoryInterface;
 use Zend\ServiceManager\ServiceLocatorInterface;
+use Zend\View\HelperPluginManager;
 
-class NotificationListenerFactory implements FactoryInterface
+/**
+ * Factory for NotificationListener.
+ *
+ * Works with both ZF2 (createService) and ZF3 (__invoke) styles.
+ */
+class NotificationListenerFactory implements V2FactoryInterface, V3FactoryInterface
 {
     /**
-     * ZF2 style factory.
+     * ZF3-style factory (__invoke).
+     *
+     * @param ContainerInterface $container
+     * @param string             $requestedName
+     * @param null|array         $options
+     * @return NotificationListener
+     */
+    public function __invoke(ContainerInterface $container, $requestedName, array $options = null)
+    {
+        return $this->doCreate($container);
+    }
+
+    /**
+     * ZF2-style factory (createService).
      *
      * @param ServiceLocatorInterface $serviceLocator
      * @return NotificationListener
      */
     public function createService(ServiceLocatorInterface $serviceLocator)
     {
-        // In some setups $serviceLocator is a plugin manager – unwrap to real container
+        // Some SM versions wrap the real container, unwrap if needed
         if (method_exists($serviceLocator, 'getServiceLocator')) {
             $container = $serviceLocator->getServiceLocator();
         } else {
             $container = $serviceLocator;
         }
 
+        return $this->doCreate($container);
+    }
+
+    /**
+     * Actual construction logic shared by both factory styles.
+     *
+     * @param ContainerInterface|ServiceLocatorInterface $container
+     * @return NotificationListener
+     */
+    private function doCreate($container)
+    {
         /** @var OptionManager $optionManager */
         $optionManager = $container->get('Base\Manager\OptionManager');
 
@@ -53,42 +83,64 @@ class NotificationListenerFactory implements FactoryInterface
         /** @var BackendMailService $backendMailService */
         $backendMailService = $container->get('Backend\Service\MailService');
 
-        // View helpers
+        /** @var HelperPluginManager $viewHelperManager */
         $viewHelperManager = $container->get('ViewHelperManager');
 
-        /** @var DateFormat $dateFormatHelper */
+        /** @var \Zend\I18n\View\Helper\DateFormat $dateFormatHelper */
         $dateFormatHelper = $viewHelperManager->get('dateFormat');
 
         /** @var DateRange $dateRangeHelper */
         $dateRangeHelper = $viewHelperManager->get('dateRange');
 
-        /** @var PriceFormatPlain|null $priceFormatHelper */
-        $priceFormatHelper = null;
-        if ($viewHelperManager->has('priceFormatPlain')) {
-            $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
-        }
-
+        // Translator – use MvcTranslator alias which ep-3 normally registers
         /** @var TranslatorInterface $translator */
-        // In ep3 this is normally registered as "MvcTranslator"
-        $translator = $container->get('MvcTranslator');
-
-        // Optional: service that handles “register interest in a day” notifications
-        /** @var BookingInterestService|null $bookingInterestService */
-        $bookingInterestService = null;
-        if ($container->has(\Service\Service\BookingInterestService::class)) {
-            $bookingInterestService = $container->get(\Service\Service\BookingInterestService::class);
+        if ($container->has('MvcTranslator')) {
+            $translator = $container->get('MvcTranslator');
+        } else {
+            // fallback (for older setups) – should still implement TranslatorInterface
+            $translator = $container->get('translator');
         }
 
-        // Optional: BillManager (only used if you later want to include billing
-        // details in notifications – but safe to inject here)
-        /** @var BillManager|null $bookingBillManager */
+        // OPTIONAL: BookingInterestService (used for “free slot” notifications).
+        // If anything goes wrong here, we quietly fall back to null so that
+        // bookings / normal mails still work.
+        $bookingInterestService = null;
+        try {
+            if ($container->has(BookingInterestService::class)) {
+                /** @var BookingInterestService $bookingInterestService */
+                $bookingInterestService = $container->get(BookingInterestService::class);
+            } elseif ($container->has('Service\Service\BookingInterestService')) {
+                $bookingInterestService = $container->get('Service\Service\BookingInterestService');
+            }
+        } catch (\Throwable $e) {
+            // Do NOT break booking flow if this optional service is misconfigured
+            error_log(
+                'SSA: BookingInterestService not available in NotificationListenerFactory: '
+                . $e->getMessage()
+            );
+            $bookingInterestService = null;
+        }
+
+        // OPTIONAL: Booking bill manager – may be null
         $bookingBillManager = null;
         if ($container->has('Booking\Manager\Booking\BillManager')) {
+            /** @var BillManager $bookingBillManager */
             $bookingBillManager = $container->get('Booking\Manager\Booking\BillManager');
         }
 
-        // Construct the listener (constructor signature matches your current
-        // NotificationListener.php file)
+        // OPTIONAL: plain price formatter helper – may be null
+        $priceFormatHelper = null;
+        try {
+            if ($viewHelperManager->has('priceFormatPlain')) {
+                /** @var PriceFormatPlain $priceFormatHelper */
+                $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
+            }
+        } catch (\Throwable $e) {
+            // not critical
+            $priceFormatHelper = null;
+        }
+
+        // Finally build the listener
         return new NotificationListener(
             $optionManager,
             $reservationManager,
@@ -99,22 +151,9 @@ class NotificationListenerFactory implements FactoryInterface
             $dateFormatHelper,
             $dateRangeHelper,
             $translator,
-            $bookingInterestService,
+            $bookingInterestService,   // may be null – code in onCancelSingle checks this
             $bookingBillManager,
             $priceFormatHelper
         );
-    }
-
-    /**
-     * ZF3 style factory proxy – just forwards to createService().
-     *
-     * @param ContainerInterface $container
-     * @param string             $requestedName
-     * @param null|array         $options
-     * @return NotificationListener
-     */
-    public function __invoke(ContainerInterface $container, $requestedName, array $options = null)
-    {
-        return $this->createService($container);
     }
 }
