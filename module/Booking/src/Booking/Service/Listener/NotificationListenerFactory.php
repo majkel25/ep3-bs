@@ -8,26 +8,26 @@ use Base\View\Helper\DateRange;
 use Base\View\Helper\PriceFormatPlain;
 use Booking\Manager\Booking\BillManager;
 use Booking\Manager\ReservationManager;
-use Interop\Container\ContainerInterface;
 use Service\Service\BookingInterestService;
 use Square\Manager\SquareManager;
 use User\Manager\UserManager;
 use User\Service\MailService as UserMailService;
 use Zend\I18n\Translator\TranslatorInterface;
-use Zend\ServiceManager\Factory\FactoryInterface as V3FactoryInterface;
+use Zend\I18n\View\Helper\DateFormat;
 use Zend\ServiceManager\FactoryInterface as V2FactoryInterface;
+use Zend\ServiceManager\Factory\FactoryInterface as V3FactoryInterface;
+use Interop\Container\ContainerInterface;
 use Zend\ServiceManager\ServiceLocatorInterface;
-use Zend\View\HelperPluginManager;
 
 /**
- * Factory for NotificationListener.
+ * Factory for Booking\Service\Listener\NotificationListener
  *
- * Works with both ZF2 (createService) and ZF3 (__invoke) styles.
+ * Works with both ZF2 (createService) and ZF3 (__invoke) ServiceManager.
  */
 class NotificationListenerFactory implements V2FactoryInterface, V3FactoryInterface
 {
     /**
-     * ZF3-style factory (__invoke).
+     * ZF3-style factory.
      *
      * @param ContainerInterface $container
      * @param string             $requestedName
@@ -36,111 +36,85 @@ class NotificationListenerFactory implements V2FactoryInterface, V3FactoryInterf
      */
     public function __invoke(ContainerInterface $container, $requestedName, array $options = null)
     {
-        return $this->doCreate($container);
+        return $this->create($container);
     }
 
     /**
-     * ZF2-style factory (createService).
+     * ZF2-style factory.
      *
      * @param ServiceLocatorInterface $serviceLocator
      * @return NotificationListener
      */
     public function createService(ServiceLocatorInterface $serviceLocator)
     {
-        // Some SM versions wrap the real container, unwrap if needed
+        // In ZF2, $serviceLocator may be a plugin manager; unwrap if needed.
         if (method_exists($serviceLocator, 'getServiceLocator')) {
             $container = $serviceLocator->getServiceLocator();
         } else {
             $container = $serviceLocator;
         }
 
-        return $this->doCreate($container);
+        return $this->create($container);
     }
 
     /**
-     * Actual construction logic shared by both factory styles.
+     * Shared construction logic.
      *
-     * @param ContainerInterface|ServiceLocatorInterface $container
+     * @param ContainerInterface $container
      * @return NotificationListener
      */
-    private function doCreate($container)
+    private function create(ContainerInterface $container)
     {
         /** @var OptionManager $optionManager */
-        $optionManager = $container->get('Base\Manager\OptionManager');
+        $optionManager = $container->get(OptionManager::class);
 
         /** @var ReservationManager $reservationManager */
-        $reservationManager = $container->get('Booking\Manager\ReservationManager');
+        $reservationManager = $container->get(ReservationManager::class);
 
         /** @var SquareManager $squareManager */
-        $squareManager = $container->get('Square\Manager\SquareManager');
+        $squareManager = $container->get(SquareManager::class);
 
         /** @var UserManager $userManager */
-        $userManager = $container->get('User\Manager\UserManager');
+        $userManager = $container->get(UserManager::class);
 
         /** @var UserMailService $userMailService */
-        $userMailService = $container->get('User\Service\MailService');
+        $userMailService = $container->get(UserMailService::class);
 
         /** @var BackendMailService $backendMailService */
-        $backendMailService = $container->get('Backend\Service\MailService');
+        $backendMailService = $container->get(BackendMailService::class);
 
-        /** @var HelperPluginManager $viewHelperManager */
+        // View helpers
         $viewHelperManager = $container->get('ViewHelperManager');
 
-        /** @var \Zend\I18n\View\Helper\DateFormat $dateFormatHelper */
-        $dateFormatHelper = $viewHelperManager->get('dateFormat');
+        /** @var DateFormat $dateFormatHelper */
+        $dateFormatHelper = $viewHelperManager->get(DateFormat::class);
 
         /** @var DateRange $dateRangeHelper */
-        $dateRangeHelper = $viewHelperManager->get('dateRange');
+        $dateRangeHelper = $viewHelperManager->get(DateRange::class);
 
-        // Translator – use MvcTranslator alias which ep-3 normally registers
         /** @var TranslatorInterface $translator */
-        if ($container->has('MvcTranslator')) {
-            $translator = $container->get('MvcTranslator');
-        } else {
-            // fallback (for older setups) – should still implement TranslatorInterface
-            $translator = $container->get('translator');
-        }
+        $translator = $container->get('MvcTranslator');
 
-        // OPTIONAL: BookingInterestService (used for “free slot” notifications).
-        // If anything goes wrong here, we quietly fall back to null so that
-        // bookings / normal mails still work.
+        // Optional: BookingInterestService (for “watch this day” notifications)
         $bookingInterestService = null;
-        try {
-            if ($container->has(BookingInterestService::class)) {
-                /** @var BookingInterestService $bookingInterestService */
-                $bookingInterestService = $container->get(BookingInterestService::class);
-            } elseif ($container->has('Service\Service\BookingInterestService')) {
-                $bookingInterestService = $container->get('Service\Service\BookingInterestService');
-            }
-        } catch (\Throwable $e) {
-            // Do NOT break booking flow if this optional service is misconfigured
-            error_log(
-                'SSA: BookingInterestService not available in NotificationListenerFactory: '
-                . $e->getMessage()
-            );
-            $bookingInterestService = null;
+        if ($container->has(BookingInterestService::class)) {
+            $bookingInterestService = $container->get(BookingInterestService::class);
         }
 
-        // OPTIONAL: Booking bill manager – may be null
+        // Optional: BillManager (if you use billing info in notifications)
         $bookingBillManager = null;
-        if ($container->has('Booking\Manager\Booking\BillManager')) {
-            /** @var BillManager $bookingBillManager */
-            $bookingBillManager = $container->get('Booking\Manager\Booking\BillManager');
+        if ($container->has(BillManager::class)) {
+            $bookingBillManager = $container->get(BillManager::class);
         }
 
-        // OPTIONAL: plain price formatter helper – may be null
+        // Optional: plain price formatter
         $priceFormatHelper = null;
-        try {
-            if ($viewHelperManager->has('priceFormatPlain')) {
-                /** @var PriceFormatPlain $priceFormatHelper */
-                $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
-            }
-        } catch (\Throwable $e) {
-            // not critical
-            $priceFormatHelper = null;
+        if ($container->has(PriceFormatPlain::class)) {
+            $priceFormatHelper = $container->get(PriceFormatPlain::class);
         }
 
-        // Finally build the listener
+        // This MUST always return an instance – otherwise ServiceManager
+        // throws the “no instance returned” error you are seeing.
         return new NotificationListener(
             $optionManager,
             $reservationManager,
@@ -151,7 +125,7 @@ class NotificationListenerFactory implements V2FactoryInterface, V3FactoryInterf
             $dateFormatHelper,
             $dateRangeHelper,
             $translator,
-            $bookingInterestService,   // may be null – code in onCancelSingle checks this
+            $bookingInterestService,
             $bookingBillManager,
             $priceFormatHelper
         );
