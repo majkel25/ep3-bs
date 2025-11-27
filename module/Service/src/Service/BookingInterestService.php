@@ -52,111 +52,179 @@ class BookingInterestService
      *   - end   (DateTime or string|null)
      *   - square_name (optional nice label)
      */
-    public function notifyCancellation(array $booking)
-    {
-        // Simple debug log
-        $startLog = isset($booking['start'])
-            ? (is_object($booking['start'])
-                ? $booking['start']->format('Y-m-d H:i:s')
-                : (string)$booking['start'])
-            : 'NULL';
+/**
+ * Notify all interested users when a booking is cancelled.
+ *
+ * @param array $booking expects:
+ *   - id
+ *   - start (DateTime or string)
+ *   - end   (DateTime or string|null)
+ *   - square_name (optional nice label)
+ */
+public function notifyCancellation(array $booking)
+{
+    // ---- DEBUG: log incoming booking data ----
+    $startLog = isset($booking['start'])
+        ? (is_object($booking['start'])
+            ? $booking['start']->format('Y-m-d H:i:s')
+            : (string)$booking['start'])
+        : 'NULL';
 
-        error_log('SSA BookingInterestService::notifyCancellation START, start=' . $startLog);
+    error_log('SSA BookingInterestService::notifyCancellation START, start=' . $startLog);
 
-        // Normalise start -> DateTime
-        $start = isset($booking['start']) ? $booking['start'] : null;
-        if (!$start) {
-            error_log('SSA BookingInterestService::notifyCancellation: no start date, abort');
-            return;
+    // Normalise start -> DateTime
+    $start = isset($booking['start']) ? $booking['start'] : null;
+    if (!$start) {
+        error_log('SSA BookingInterestService::notifyCancellation: no start date, abort');
+        return;
+    }
+
+    if (!$start instanceof \DateTimeInterface) {
+        $start = new \DateTime($start);
+    }
+
+    $dateStr = $start->format('Y-m-d');
+    error_log('SSA BookingInterestService::notifyCancellation: interest_date=' . $dateStr);
+
+    // ---- Load interest rows for that date ----
+    $select = new Select('bs_booking_interest');
+    $select->where(array('interest_date' => $dateStr));
+
+    $rows    = $this->tg->selectWith($select);
+    $rowList = array();
+    foreach ($rows as $row) {
+        // buffer rows so we can iterate multiple times
+        $rowList[] = $row;
+    }
+
+    $rowCount = count($rowList);
+    error_log('SSA BookingInterestService::notifyCancellation: interest rows found=' . $rowCount);
+
+    if ($rowCount === 0) {
+        // Nothing to notify
+        return;
+    }
+
+    // ---- Build list of user IDs from rows (support user_id OR uid) ----
+    $userIds = array();
+    foreach ($rowList as $row) {
+        // Row may be ArrayObject, use array access
+        $uIdFromRow = null;
+
+        if (isset($row['user_id'])) {
+            $uIdFromRow = (int)$row['user_id'];
+        } elseif (isset($row['uid'])) {
+            $uIdFromRow = (int)$row['uid'];
         }
 
-        if (!$start instanceof \DateTimeInterface) {
-            $start = new \DateTime($start);
+        if ($uIdFromRow !== null) {
+            $userIds[] = $uIdFromRow;
+        }
+    }
+
+    $userIds = array_values(array_unique($userIds));
+    error_log('SSA BookingInterestService::notifyCancellation: userIds=' . implode(',', $userIds));
+
+    if (empty($userIds)) {
+        error_log('SSA BookingInterestService::notifyCancellation: no userIds resolved from interest rows');
+        return;
+    }
+
+    // ---- Fetch contact data for these users ----
+    $users = $this->fetchUserContacts($userIds);
+
+    if (empty($users)) {
+        error_log('SSA BookingInterestService::notifyCancellation: fetchUserContacts returned empty map');
+    }
+
+    $emailBody  = $this->buildEmailBody($booking);
+    $waUserText = $this->buildWhatsAppUserText($booking);
+
+    $sentEmails = array();
+
+    foreach ($userIds as $uid) {
+        if (!isset($users[$uid])) {
+            error_log('SSA BookingInterestService::notifyCancellation: no contact record for uid=' . $uid);
+            continue;
         }
 
-        $dateStr = $start->format('Y-m-d');
-        error_log('SSA BookingInterestService::notifyCancellation: interest_date=' . $dateStr);
+        $contact = $users[$uid];
 
-        // Find interest rows for that date
-        $select = new Select('bs_booking_interest');
-        $select->where(array('interest_date' => $dateStr));
+        // Email
+        if (!empty($contact['notify_cancel_email']) && !empty($contact['email'])) {
+            $email = $contact['email'];
 
-        $rows = $this->tg->selectWith($select);
-        $rowCount = 0;
-        foreach ($rows as $row) {
-            $rowCount++;
-        }
+            error_log(sprintf(
+                'SSA BookingInterestService::notifyCancellation: sending EMAIL to uid=%d <%s>',
+                $uid,
+                $email
+            ));
 
-        error_log('SSA BookingInterestService::notifyCancellation: interest rows found=' . $rowCount);
-
-        if ($rowCount === 0) {
-            return;
-        }
-
-        // We need to iterate rows again, so re-query or buffer
-        $rows = $this->tg->selectWith($select);
-
-        $userIds = array();
-        foreach ($rows as $row) {
-            $userIds[] = (int)$row['user_id'];
-        }
-        $userIds = array_values(array_unique($userIds));
-
-        $users = $this->fetchUserContacts($userIds);
-
-        $emailBody  = $this->buildEmailBody($booking);
-        $waUserText = $this->buildWhatsAppUserText($booking);
-
-        $sentEmails = array();
-
-        foreach ($userIds as $uid) {
-            if (!isset($users[$uid])) {
-                continue;
-            }
-
-            $contact = $users[$uid];
-
-            // Email
-            if (!empty($contact['notify_cancel_email']) && !empty($contact['email'])) {
-                $email = $contact['email'];
-
-                error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: sending EMAIL to uid=%d <%s>',
-                    $uid,
-                    $email
-                ));
-
-                if (!isset($sentEmails[$email])) {
+            if (!isset($sentEmails[$email])) {
+                try {
                     $this->sendEmail($email, $emailBody);
                     $sentEmails[$email] = true;
+                } catch (\Throwable $e) {
+                    error_log(sprintf(
+                        'SSA BookingInterestService::notifyCancellation: sendEmail FAILED for <%s>: %s',
+                        $email,
+                        $e->getMessage()
+                    ));
                 }
             }
-
-            // WhatsApp
-            if ($this->whatsApp
-                && !empty($contact['notify_cancel_whatsapp'])
-                && !empty($contact['phone'])
-            ) {
-                error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d %s',
-                    $uid,
-                    $contact['phone']
-                ));
-
-                $this->whatsApp->sendToNumber($contact['phone'], $waUserText);
-            }
+        } else {
+            error_log(sprintf(
+                'SSA BookingInterestService::notifyCancellation: NOT sending email to uid=%d (flag=%s, email=%s)',
+                $uid,
+                isset($contact['notify_cancel_email']) ? (string)$contact['notify_cancel_email'] : 'null',
+                isset($contact['email']) ? (string)$contact['email'] : 'null'
+            ));
         }
 
-        // Mark notifications as sent for this date
-        $now = (new \DateTime())->format('Y-m-d H:i:s');
-        $rows = $this->tg->selectWith($select);
-        foreach ($rows as $row) {
+        // WhatsApp (optional)
+        if ($this->whatsApp
+            && !empty($contact['notify_cancel_whatsapp'])
+            && !empty($contact['phone'])
+        ) {
+            error_log(sprintf(
+                'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d %s',
+                $uid,
+                $contact['phone']
+            ));
+
+            try {
+                $this->whatsApp->sendToNumber($contact['phone'], $waUserText);
+            } catch (\Throwable $e) {
+                error_log(sprintf(
+                    'SSA BookingInterestService::notifyCancellation: WhatsApp send FAILED for uid=%d: %s',
+                    $uid,
+                    $e->getMessage()
+                ));
+            }
+        }
+    }
+
+    // ---- Mark notifications as sent for this date ----
+    $now = (new \DateTime())->format('Y-m-d H:i:s');
+
+    foreach ($rowList as $row) {
+        // support id or iid as primary key
+        $pk = null;
+        if (isset($row['id'])) {
+            $pk = (int)$row['id'];
+        } elseif (isset($row['iid'])) {
+            $pk = (int)$row['iid'];
+        }
+
+        if ($pk !== null) {
             $this->tg->update(
                 array('notified_at' => $now),
-                array('id' => (int)$row['id'])
+                array('id' => $pk)
             );
         }
     }
+}
+
 
     /**
      * Load contact data for a set of user IDs.
