@@ -23,3 +23,4 @@ class NotificationListenerFactory implements FactoryInterface
             $sm->get('Booking\Manager\Booking\BillManager'),
             $sm->get('ViewHelperManager')->get('PriceFormatPlain'));
     }
+}
