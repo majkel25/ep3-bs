@@ -27,7 +27,13 @@ class NotificationListenerFactory implements FactoryInterface
      */
     public function createService(ServiceLocatorInterface $serviceLocator)
     {
-        $sm = $serviceLocator; // main service manager
+        // IMPORTANT: unwrap to the real ServiceManager if we are called
+        // from within a plugin manager (original ep-3 pattern).
+        if (method_exists($serviceLocator, 'getServiceLocator')) {
+            $sm = $serviceLocator->getServiceLocator();
+        } else {
+            $sm = $serviceLocator;
+        }
 
         /** @var OptionManager $optionManager */
         $optionManager = $sm->get('Base\Manager\OptionManager');
@@ -66,14 +72,14 @@ class NotificationListenerFactory implements FactoryInterface
         /** @var PriceFormatPlain|null $priceFormatHelper */
         $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
 
-        // --- NEW: BookingInterestService is OPTIONAL and fully guarded ---
+        // BookingInterestService is OPTIONAL and fully guarded so it can
+        // never break the listener construction.
         $bookingInterestService = null;
         try {
             if ($sm->has(BookingInterestService::class)) {
                 $bookingInterestService = $sm->get(BookingInterestService::class);
             }
         } catch (\Throwable $e) {
-            // Do NOT break the listener if interest service fails
             error_log(
                 'SSA: failed to get BookingInterestService in NotificationListenerFactory: '
                 . $e->getMessage()
@@ -81,7 +87,6 @@ class NotificationListenerFactory implements FactoryInterface
             $bookingInterestService = null;
         }
 
-        // Always return a listener instance
         return new NotificationListener(
             $optionManager,
             $reservationManager,
@@ -92,7 +97,7 @@ class NotificationListenerFactory implements FactoryInterface
             $dateFormatHelper,
             $dateRangeHelper,
             $translator,
-            $bookingInterestService,   // optional; may be null
+            $bookingInterestService,   // may be null
             $bookingBillManager,
             $priceFormatHelper
         );
