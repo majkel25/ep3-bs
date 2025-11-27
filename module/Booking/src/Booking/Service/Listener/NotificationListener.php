@@ -16,6 +16,8 @@ use Zend\EventManager\Event;
 use Zend\EventManager\EventManagerInterface;
 use Zend\I18n\Translator\TranslatorInterface;
 use Zend\I18n\View\Helper\DateFormat;
+use Service\Service\BookingInterestService;
+use Zend\Mvc\I18n\Translator;
 
 class NotificationListener extends AbstractListenerAggregate
 {
@@ -31,10 +33,23 @@ class NotificationListener extends AbstractListenerAggregate
     protected $dateRangeHelper;
     protected $translator;
     protected $priceFormatHelper;
+    /** @var BookingInterestService|null */
+    protected $bookingInterestService;
 
-    public function __construct(OptionManager $optionManager, ReservationManager $reservationManager, SquareManager $squareManager,
-	    UserManager $userManager, UserMailService $userMailService, BackendMailService $backendMailService,
-	    DateFormat $dateFormatHelper, DateRange $dateRangeHelper, TranslatorInterface $translator,  BillManager $bookingBillManager, PriceFormatPlain $priceFormatHelper)
+    public function __construct(
+        OptionManager $optionManager, 
+        ReservationManager $reservationManager, 
+        SquareManager $squareManager,
+	    UserManager $userManager, 
+        UserMailService $userMailService, 
+        BackendMailService $backendMailService,
+	    DateFormat $dateFormatHelper, 
+        DateRange $dateRangeHelper, 
+        TranslatorInterface $translator,  
+        BillManager $bookingBillManager, 
+        PriceFormatPlain $priceFormatHelper,
+        BookingInterestService $bookingInterestService = null
+    )
     {
         $this->optionManager = $optionManager;
         $this->reservationManager = $reservationManager;
@@ -47,6 +62,7 @@ class NotificationListener extends AbstractListenerAggregate
         $this->dateRangeHelper = $dateRangeHelper;
         $this->translator = $translator;
         $this->priceFormatHelper = $priceFormatHelper;
+        $this->bookingInterestService = $bookingInterestService;
     }
 
     public function attach(EventManagerInterface $events)
@@ -189,6 +205,23 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
+        if ($this->bookingInterestService) {
+            try {
+                $this->bookingInterestService->notifyCancellation([
+                    'id'          => $booking->need('bid'),
+                    'start'       => $reservationStart,
+                    'end'         => $reservationEnd,
+                    'square_name' => $square->need('name'),
+                ]);
+            } catch (\Throwable $e) {
+                // Do NOT break normal cancellation flow if interest notifications fail
+                error_log(
+                    'SSA NotificationListener::onCancelSingle notifyCancellation failed: ' .
+                    $e->getMessage()
+                );
+            }
+        }
+
         $subject = sprintf($this->t('Your %s-booking has been cancelled'),
             $this->optionManager->get('subject.square.type'));
 
@@ -203,11 +236,15 @@ class NotificationListener extends AbstractListenerAggregate
 
 	    if ($this->optionManager->get('client.contact.email.user-notifications')) {
 
-		    $backendSubject = sprintf($this->t('%s\'s %s-booking has been cancelled'),
-		        $user->need('alias'), $this->optionManager->get('subject.square.type'));
+		    $backendSubject = sprintf(
+                $this->t('%s\'s %s-booking has been cancelled'),
+		        $user->need('alias'), 
+                $this->optionManager->get('subject.square.type'));
 
-		    $addendum = sprintf($this->t('Originally sent to %s (%s).'),
-	            $user->need('alias'), $user->need('email'));
+		    $addendum = sprintf(
+                $this->t('Originally sent to %s (%s).'),
+	            $user->need('alias'),
+                $user->need('email'));
 
 	        $this->backendMailService->send($backendSubject, $message, array(), $addendum);
         }
