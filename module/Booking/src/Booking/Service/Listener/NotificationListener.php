@@ -190,6 +190,12 @@ class NotificationListener extends AbstractListenerAggregate
         //Temoprary debug addition:
         //error_log("DEBUG: NotificationListener - Interest service = " . get_class($this->bookingInterestService));
 
+        error_log(
+                'SSA NotificationListener::onCancelSingle interest service = ' .
+                (is_object($this->bookingInterestService)
+                ? get_class($this->bookingInterestService)
+                : 'NULL')
+        );
     
         $booking      = $event->getTarget();
         $reservations = $this->reservationManager->getBy(
