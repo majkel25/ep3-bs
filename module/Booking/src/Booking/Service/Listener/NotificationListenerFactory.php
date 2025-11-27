@@ -2,78 +2,81 @@
 
 namespace Booking\Service\Listener;
 
+use Backend\Service\MailService as BackendMailService;
+use Base\Manager\OptionManager;
+use Base\View\Helper\DateRange;
+use Base\View\Helper\PriceFormatPlain;
 use Booking\Manager\Booking\BillManager;
+use Booking\Manager\ReservationManager;
 use Service\Service\BookingInterestService;
+use Square\Manager\SquareManager;
+use User\Manager\UserManager;
+use User\Service\MailService as UserMailService;
+use Zend\I18n\Translator\TranslatorInterface;
+use Zend\I18n\View\Helper\DateFormat;
 use Zend\ServiceManager\FactoryInterface;
 use Zend\ServiceManager\ServiceLocatorInterface;
 
-/**
- * Factory for NotificationListener.
- */
 class NotificationListenerFactory implements FactoryInterface
 {
     /**
-     * {@inheritdoc}
+     * ZF2 factory – builds NotificationListener with all dependencies,
+     * including BookingInterestService.
+     *
+     * @param ServiceLocatorInterface $serviceLocator
+     * @return NotificationListener
      */
     public function createService(ServiceLocatorInterface $serviceLocator)
     {
-        // --- Core required services ---
+        // On this project the main ServiceManager is passed directly,
+        // so no need to unwrap; but keep a variable for clarity.
+        $sm = $serviceLocator;
 
-        $optionManager      = $serviceLocator->get('Base\Manager\OptionManager');
-        $reservationManager = $serviceLocator->get('Booking\Manager\ReservationManager');
-        $squareManager      = $serviceLocator->get('Square\Manager\SquareManager');
-        $userManager        = $serviceLocator->get('User\Manager\UserManager');
-        $userMailService    = $serviceLocator->get('User\Service\MailService');
-        $backendMailService = $serviceLocator->get('Backend\Service\MailService');
-        $viewHelperManager  = $serviceLocator->get('ViewHelperManager');
-        $translator         = $serviceLocator->get('MvcTranslator');
+        /** @var OptionManager $optionManager */
+        $optionManager = $sm->get('Base\Manager\OptionManager');
 
-        $dateFormatHelper   = $viewHelperManager->get('DateFormat');
-        $dateRangeHelper    = $viewHelperManager->get('DateRange');
+        /** @var ReservationManager $reservationManager */
+        $reservationManager = $sm->get('Booking\Manager\ReservationManager');
 
-        // --- Optional / new services: make them robust ---
+        /** @var SquareManager $squareManager */
+        $squareManager = $sm->get('Square\Manager\SquareManager');
 
-        // Interest-in-days service
+        /** @var UserManager $userManager */
+        $userManager = $sm->get('User\Manager\UserManager');
+
+        /** @var UserMailService $userMailService */
+        $userMailService = $sm->get('User\Service\MailService');
+
+        /** @var BackendMailService $backendMailService */
+        $backendMailService = $sm->get('Backend\Service\MailService');
+
+        $viewHelperManager = $sm->get('ViewHelperManager');
+
+        /** @var DateFormat $dateFormatHelper */
+        $dateFormatHelper = $viewHelperManager->get('dateFormat');
+
+        /** @var DateRange $dateRangeHelper */
+        $dateRangeHelper = $viewHelperManager->get('dateRange');
+
+        /** @var TranslatorInterface $translator */
+        $translator = $sm->get('translator');
+
+        /** @var BillManager|null $bookingBillManager */
+        $bookingBillManager = $sm->has('Booking\Manager\Booking\BillManager')
+            ? $sm->get('Booking\Manager\Booking\BillManager')
+            : null;
+
+        /** @var PriceFormatPlain|null $priceFormatHelper */
+        $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
+
+        // NEW: wire BookingInterestService
+        /** @var BookingInterestService|null $bookingInterestService */
         $bookingInterestService = null;
-        try {
-            $bookingInterestService = $serviceLocator->get(BookingInterestService::class);
-        } catch (\Throwable $e) {
-            // If not configured, just skip interest notifications
-            error_log(
-                'SSA: BookingInterestService not available in NotificationListenerFactory: '
-                . $e->getMessage()
-            );
-            $bookingInterestService = null;
+        if ($sm->has(BookingInterestService::class)) {
+            $bookingInterestService = $sm->get(BookingInterestService::class);
         }
 
-        // Bill manager for pricing related notifications
-        $bookingBillManager = null;
-        try {
-            /** @var BillManager $bookingBillManager */
-            $bookingBillManager = $serviceLocator->get('Booking\Manager\Booking\BillManager');
-        } catch (\Throwable $e) {
-            error_log(
-                'SSA: Booking\\Manager\\Booking\\BillManager not available: '
-                . $e->getMessage()
-            );
-            $bookingBillManager = null;
-        }
-
-        // Helper for formatting prices in plain text
-        $priceFormatHelper = null;
-        try {
-            $priceFormatHelper = $viewHelperManager->get('PriceFormatPlain');
-        } catch (\Throwable $e) {
-            error_log(
-                'SSA: PriceFormatPlain helper not available: '
-                . $e->getMessage()
-            );
-            $priceFormatHelper = null;
-        }
-
-        // --- Create the listener with all dependencies ---
-
-        $listener = new NotificationListener(
+        return new NotificationListener(
             $optionManager,
             $reservationManager,
             $squareManager,
@@ -87,9 +90,5 @@ class NotificationListenerFactory implements FactoryInterface
             $bookingBillManager,
             $priceFormatHelper
         );
-
-        error_log('SSA: NotificationListenerFactory created NotificationListener instance');
-
-        return $listener;
     }
 }
