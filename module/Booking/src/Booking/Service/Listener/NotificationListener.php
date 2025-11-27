@@ -8,85 +8,214 @@ use Base\View\Helper\DateRange;
 use Base\View\Helper\PriceFormatPlain;
 use Booking\Manager\Booking\BillManager;
 use Booking\Manager\ReservationManager;
-use Service\Service\BookingInterestService;
 use Square\Manager\SquareManager;
 use User\Manager\UserManager;
 use User\Service\MailService as UserMailService;
+use Zend\EventManager\AbstractListenerAggregate;
+use Zend\EventManager\Event;
+use Zend\EventManager\EventManagerInterface;
 use Zend\I18n\Translator\TranslatorInterface;
 use Zend\I18n\View\Helper\DateFormat;
-use Zend\ServiceManager\FactoryInterface;
-use Zend\ServiceManager\ServiceLocatorInterface;
 
-class NotificationListenerFactory implements FactoryInterface
+class NotificationListener extends AbstractListenerAggregate
 {
-    /**
-     * ZF2 factory – builds NotificationListener with all dependencies,
-     * including BookingInterestService.
-     *
-     * @param ServiceLocatorInterface $serviceLocator
-     * @return NotificationListener
-     */
-    public function createService(ServiceLocatorInterface $serviceLocator)
+
+    protected $optionManager;
+    protected $reservationManager;
+    protected $squareManager;
+    protected $userManager;
+    protected $bookingBillManager;
+    protected $userMailService;
+	protected $backendMailService;
+    protected $dateFormatHelper;
+    protected $dateRangeHelper;
+    protected $translator;
+    protected $priceFormatHelper;
+
+    public function __construct(OptionManager $optionManager, ReservationManager $reservationManager, SquareManager $squareManager,
+	    UserManager $userManager, UserMailService $userMailService, BackendMailService $backendMailService,
+	    DateFormat $dateFormatHelper, DateRange $dateRangeHelper, TranslatorInterface $translator,  BillManager $bookingBillManager, PriceFormatPlain $priceFormatHelper)
     {
-        $sm = $serviceLocator; // main ServiceManager
+        $this->optionManager = $optionManager;
+        $this->reservationManager = $reservationManager;
+        $this->squareManager = $squareManager;
+        $this->userManager = $userManager;
+        $this->userMailService = $userMailService;
+	    $this->backendMailService = $backendMailService;
+        $this->bookingBillManager = $bookingBillManager;
+        $this->dateFormatHelper = $dateFormatHelper;
+        $this->dateRangeHelper = $dateRangeHelper;
+        $this->translator = $translator;
+        $this->priceFormatHelper = $priceFormatHelper;
+    }
 
-        /** @var OptionManager $optionManager */
-        $optionManager = $sm->get('Base\Manager\OptionManager');
+    public function attach(EventManagerInterface $events)
+    {
+        $events->attach('create.single', array($this, 'onCreateSingle'));
+        $events->attach('cancel.single', array($this, 'onCancelSingle'));
+    }
 
-        /** @var ReservationManager $reservationManager */
-        $reservationManager = $sm->get('Booking\Manager\ReservationManager');
+    public function onCreateSingle(Event $event)
+    {
+        $booking = $event->getTarget();
+        $reservation = current($booking->getExtra('reservations'));
+        $square = $this->squareManager->get($booking->need('sid'));
+        $user = $this->userManager->get($booking->need('uid'));
 
-        /** @var SquareManager $squareManager */
-        $squareManager = $sm->get('Square\Manager\SquareManager');
+        $dateFormatHelper = $this->dateFormatHelper;
+        $dateRangerHelper = $this->dateRangeHelper;
+        $priceFormatHelper = $this->priceFormatHelper;
 
-        /** @var UserManager $userManager */
-        $userManager = $sm->get('User\Manager\UserManager');
+	    $reservationTimeStart = explode(':', $reservation->need('time_start'));
+        $reservationTimeEnd = explode(':', $reservation->need('time_end'));
 
-        /** @var UserMailService $userMailService */
-        $userMailService = $sm->get('User\Service\MailService');
+        $reservationStart = new \DateTime($reservation->need('date'));
+        $reservationStart->setTime($reservationTimeStart[0], $reservationTimeStart[1]);
 
-        /** @var BackendMailService $backendMailService */
-        $backendMailService = $sm->get('Backend\Service\MailService');
+        $reservationEnd = new \DateTime($reservation->need('date'));
+        $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
-        $viewHelperManager = $sm->get('ViewHelperManager');
+        $vCalendar = new \Eluceo\iCal\Component\Calendar($this->optionManager->get('client.website'));
+        $vEvent = new \Eluceo\iCal\Component\Event();
+        $vEvent
+            ->setDtStart($reservationStart)
+            ->setDtEnd($reservationEnd)
+            ->setNoTime(false)
+            ->setSummary($this->optionManager->get('client.name.full') . ' - Snooker Booking - Table ' . $square->need('name'))
+        ;
+        $vCalendar->addComponent($vEvent);
 
-        /** @var DateFormat $dateFormatHelper */
-        $dateFormatHelper = $viewHelperManager->get('dateFormat');
+        $subject = sprintf($this->t('Your %s-booking for %s'),
+            $this->optionManager->get('subject.square.type'),
+            $dateFormatHelper($reservationStart, \IntlDateFormatter::MEDIUM, \IntlDateFormatter::SHORT));
 
-        /** @var DateRange $dateRangeHelper */
-        $dateRangeHelper = $viewHelperManager->get('dateRange');
+        $message = sprintf($this->t('We have reserved %s %s, %s for you. Thank you for your booking.'),
+            $this->optionManager->get('subject.square.type'),
+            $square->need('name'),
+            $dateRangerHelper($reservationStart, $reservationEnd));
+        $message .= "\n\nEnjoy your snooker.";
 
-        /** @var TranslatorInterface $translator */
-        $translator = $sm->get('translator');
+        $playerNames = $booking->getMeta('player-names');
 
-        /** @var BillManager|null $bookingBillManager */
-        $bookingBillManager = $sm->has('Booking\Manager\Booking\BillManager')
-            ? $sm->get('Booking\Manager\Booking\BillManager')
-            : null;
+        if ($playerNames) {
+            $playerNamesUnserialized = @unserialize($playerNames);
 
-        /** @var PriceFormatPlain|null $priceFormatHelper */
-        $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
+            if (is_iterable($playerNamesUnserialized)) {
+                $message .= "\n\nSpecified Players:";
 
-        // NEW: BookingInterestService is optional – inject if available
-        /** @var BookingInterestService|null $bookingInterestService */
-        $bookingInterestService = null;
-        if ($sm->has(BookingInterestService::class)) {
-            $bookingInterestService = $sm->get(BookingInterestService::class);
+                foreach ($playerNamesUnserialized as $i => $playerName) {
+                    $message .= sprintf("\n%s. %s",
+                        $i + 1, $playerName['value']);
+                }
+            }
         }
 
-        return new NotificationListener(
-            $optionManager,
-            $reservationManager,
-            $squareManager,
-            $userManager,
-            $userMailService,
-            $backendMailService,
-            $dateFormatHelper,
-            $dateRangeHelper,
-            $translator,
-            $bookingInterestService,
-            $bookingBillManager,
-            $priceFormatHelper
-        );
+        $bills = $this->bookingBillManager->getBy(array('bid' => $booking->get('bid')), 'bbid ASC');
+        if(count($bills) > 0) {
+            $message .= "\n\n" . $this->t('Bill'). ":\n";
+
+            $total = 0;
+
+
+            foreach ($bills as $bill) {
+                $total += $bill->get('price');
+                $items = 'x';
+                $squareUnit = '';
+
+                if ($bill->get('quantity') == 1) {
+                    $squareUnit = $this->optionManager->get('subject.square.unit');
+                } else {
+                    $squareUnit = $this->optionManager->get('subject.square.unit.plural');
+                }
+
+                if ($bill->get('time')) {
+                    $items = $squareUnit;
+                }
+
+                $message .= "\n";
+                $message .= $bill->get('description') . " (" . $bill->get('quantity') . " " . $items . ")";
+                $message .= " -> ";
+                $message .= $priceFormatHelper($bill->get('price'), $bill->get('rate'), $bill->get('gross'));
+            }
+            $message .= "\n\n";
+            $message .= $this->t('Total');
+            $message .= " -> ";
+            $message .= $priceFormatHelper($total);
+
+            $message .= "\n\n";
+        }
+
+
+
+
+        if ($square->get('allow_notes') && $booking->getMeta('notes') && strlen($booking->getMeta('notes')) > 0) {
+            $message .= "\n\nNotes:";
+            $message .= "\n" . $booking->getMeta('notes');
+        }
+
+        if ($user->getMeta('notification.bookings', 'true') == 'true') {
+            $attachments = ['event.ics' => ['name' => 'event.ics', 'disposition' => true, 'type' => 'text/calendar', 'content' => $vCalendar->render()]];
+            $this->userMailService->send($user, $subject, $message, $attachments);
+        }
+
+	    if ($this->optionManager->get('client.contact.email.user-notifications')) {
+
+		    $backendSubject = sprintf($this->t('%s\'s %s-booking for %s'),
+		        $user->need('alias'), $this->optionManager->get('subject.square.type'),
+			    $dateFormatHelper($reservationStart, \IntlDateFormatter::MEDIUM, \IntlDateFormatter::SHORT));
+
+		    $addendum = "";
+
+	        $this->backendMailService->send($backendSubject, $message, array(), $addendum);
+        }
     }
+
+    public function onCancelSingle(Event $event)
+    {
+        $booking = $event->getTarget();
+        $reservations = $this->reservationManager->getBy(['bid' => $booking->need('bid')], 'date ASC', 1);
+        $reservation = current($reservations);
+        $square = $this->squareManager->get($booking->need('sid'));
+        $user = $this->userManager->get($booking->need('uid'));
+
+        $dateRangerHelper = $this->dateRangeHelper;
+
+	    $reservationTimeStart = explode(':', $reservation->need('time_start'));
+        $reservationTimeEnd = explode(':', $reservation->need('time_end'));
+
+        $reservationStart = new \DateTime($reservation->need('date'));
+        $reservationStart->setTime($reservationTimeStart[0], $reservationTimeStart[1]);
+
+        $reservationEnd = new \DateTime($reservation->need('date'));
+        $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
+
+        $subject = sprintf($this->t('Your %s-booking has been cancelled'),
+            $this->optionManager->get('subject.square.type'));
+
+        $message = sprintf($this->t('we have just cancelled %s %s, %s for you.'),
+            $this->optionManager->get('subject.square.type'),
+            $square->need('name'),
+            $dateRangerHelper($reservationStart, $reservationEnd));
+
+        if ($user->getMeta('notification.bookings', 'true') == 'true') {
+            $this->userMailService->send($user, $subject, $message);
+        }
+
+	    if ($this->optionManager->get('client.contact.email.user-notifications')) {
+
+		    $backendSubject = sprintf($this->t('%s\'s %s-booking has been cancelled'),
+		        $user->need('alias'), $this->optionManager->get('subject.square.type'));
+
+		    $addendum = sprintf($this->t('Originally sent to %s (%s).'),
+	            $user->need('alias'), $user->need('email'));
+
+	        $this->backendMailService->send($backendSubject, $message, array(), $addendum);
+        }
+    }
+
+    protected function t($message)
+    {
+        return $this->translator->translate($message);
+    }
+
 }
