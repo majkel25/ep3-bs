@@ -178,7 +178,8 @@ class NotificationListener extends AbstractListenerAggregate
                 $user->need('email')
             );
 
-	        $this->backendMailService->send($backendSubject, $message, array(), $addendum);
+	        //$this->backendMailService->send($backendSubject, $message, array(), $addendum);
+            $this->backendMailService->send($backendSubject, $message, []);
         }
     }
 
@@ -205,24 +206,24 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
-        // --- BEGIN TEMP DISABLE INTEREST NOTIFICATION ---
+        
         // NEW: notify users who registered interest for this day/slot
-        //if ($this->bookingInterestService instanceof BookingInterestService) {
-        //    try {
-        //        $this->bookingInterestService->notifyCancellation([
-        //            'id'          => $booking->need('bid'),
-        //            'start'       => $reservationStart,
-        //            'end'         => $reservationEnd,
-        //            'square_name' => $square->need('name'),
-        //        ]);
-        //    } catch (\Throwable $e) {
-        //        error_log(
-        //            'SSA NotificationListener::onCancelSingle notifyCancellation failed: ' .
-        //            $e->getMessage()
-        //        );
-        //    }
-        //}
-        // --- END TEMP DISABLE INTEREST NOTIFICATION ---
+        if ($this->bookingInterestService instanceof BookingInterestService) {
+            try {
+                $this->bookingInterestService->notifyCancellation([
+                    'id'          => $booking->need('bid'),
+                    'start'       => $reservationStart,
+                    'end'         => $reservationEnd,
+                    'square_name' => $square->need('name'),
+                ]);
+            } catch (\Throwable $e) {
+                error_log(
+                    'SSA NotificationListener::onCancelSingle notifyCancellation failed: ' .
+                    $e->getMessage()
+                );
+            }
+        }
+        
 
         $subject = sprintf(
             $this->t('Your %s-booking has been cancelled'),
@@ -254,7 +255,8 @@ class NotificationListener extends AbstractListenerAggregate
                 $user->need('email')
             );
 
-	        $this->backendMailService->send($backendSubject, $message, array(), $addendum);
+	        //$this->backendMailService->send($backendSubject, $message, array(), $addendum);
+            $this->backendMailService->send($backendSubject, $message, []);
         }
     }
 
