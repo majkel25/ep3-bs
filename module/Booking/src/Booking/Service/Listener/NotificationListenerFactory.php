@@ -8,6 +8,7 @@ use Base\View\Helper\DateRange;
 use Base\View\Helper\PriceFormatPlain;
 use Booking\Manager\Booking\BillManager;
 use Booking\Manager\ReservationManager;
+use Interop\Container\ContainerInterface;
 use Service\Service\BookingInterestService;
 use Square\Manager\SquareManager;
 use User\Manager\UserManager;
@@ -20,40 +21,40 @@ use Zend\ServiceManager\ServiceLocatorInterface;
 class NotificationListenerFactory implements FactoryInterface
 {
     /**
-     * ZF2-style factory.
+     * ZF2 style factory.
      *
      * @param ServiceLocatorInterface $serviceLocator
      * @return NotificationListener
      */
     public function createService(ServiceLocatorInterface $serviceLocator)
     {
-        // IMPORTANT: unwrap to the real ServiceManager if we are called
-        // from within a plugin manager (original ep-3 pattern).
+        // In some setups $serviceLocator is a plugin manager – unwrap to real container
         if (method_exists($serviceLocator, 'getServiceLocator')) {
-            $sm = $serviceLocator->getServiceLocator();
+            $container = $serviceLocator->getServiceLocator();
         } else {
-            $sm = $serviceLocator;
+            $container = $serviceLocator;
         }
 
         /** @var OptionManager $optionManager */
-        $optionManager = $sm->get('Base\Manager\OptionManager');
+        $optionManager = $container->get('Base\Manager\OptionManager');
 
         /** @var ReservationManager $reservationManager */
-        $reservationManager = $sm->get('Booking\Manager\ReservationManager');
+        $reservationManager = $container->get('Booking\Manager\ReservationManager');
 
         /** @var SquareManager $squareManager */
-        $squareManager = $sm->get('Square\Manager\SquareManager');
+        $squareManager = $container->get('Square\Manager\SquareManager');
 
         /** @var UserManager $userManager */
-        $userManager = $sm->get('User\Manager\UserManager');
+        $userManager = $container->get('User\Manager\UserManager');
 
         /** @var UserMailService $userMailService */
-        $userMailService = $sm->get('User\Service\MailService');
+        $userMailService = $container->get('User\Service\MailService');
 
         /** @var BackendMailService $backendMailService */
-        $backendMailService = $sm->get('Backend\Service\MailService');
+        $backendMailService = $container->get('Backend\Service\MailService');
 
-        $viewHelperManager = $sm->get('ViewHelperManager');
+        // View helpers
+        $viewHelperManager = $container->get('ViewHelperManager');
 
         /** @var DateFormat $dateFormatHelper */
         $dateFormatHelper = $viewHelperManager->get('dateFormat');
@@ -61,32 +62,33 @@ class NotificationListenerFactory implements FactoryInterface
         /** @var DateRange $dateRangeHelper */
         $dateRangeHelper = $viewHelperManager->get('dateRange');
 
-        /** @var TranslatorInterface $translator */
-        $translator = $sm->get('translator');
-
-        /** @var BillManager|null $bookingBillManager */
-        $bookingBillManager = $sm->has('Booking\Manager\Booking\BillManager')
-            ? $sm->get('Booking\Manager\Booking\BillManager')
-            : null;
-
         /** @var PriceFormatPlain|null $priceFormatHelper */
-        $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
-
-        // BookingInterestService is OPTIONAL and fully guarded so it can
-        // never break the listener construction.
-        $bookingInterestService = null;
-        try {
-            if ($sm->has(BookingInterestService::class)) {
-                $bookingInterestService = $sm->get(BookingInterestService::class);
-            }
-        } catch (\Throwable $e) {
-            error_log(
-                'SSA: failed to get BookingInterestService in NotificationListenerFactory: '
-                . $e->getMessage()
-            );
-            $bookingInterestService = null;
+        $priceFormatHelper = null;
+        if ($viewHelperManager->has('priceFormatPlain')) {
+            $priceFormatHelper = $viewHelperManager->get('priceFormatPlain');
         }
 
+        /** @var TranslatorInterface $translator */
+        // In ep3 this is normally registered as "MvcTranslator"
+        $translator = $container->get('MvcTranslator');
+
+        // Optional: service that handles “register interest in a day” notifications
+        /** @var BookingInterestService|null $bookingInterestService */
+        $bookingInterestService = null;
+        if ($container->has(\Service\Service\BookingInterestService::class)) {
+            $bookingInterestService = $container->get(\Service\Service\BookingInterestService::class);
+        }
+
+        // Optional: BillManager (only used if you later want to include billing
+        // details in notifications – but safe to inject here)
+        /** @var BillManager|null $bookingBillManager */
+        $bookingBillManager = null;
+        if ($container->has('Booking\Manager\Booking\BillManager')) {
+            $bookingBillManager = $container->get('Booking\Manager\Booking\BillManager');
+        }
+
+        // Construct the listener (constructor signature matches your current
+        // NotificationListener.php file)
         return new NotificationListener(
             $optionManager,
             $reservationManager,
@@ -97,9 +99,22 @@ class NotificationListenerFactory implements FactoryInterface
             $dateFormatHelper,
             $dateRangeHelper,
             $translator,
-            $bookingInterestService,   // may be null
+            $bookingInterestService,
             $bookingBillManager,
             $priceFormatHelper
         );
+    }
+
+    /**
+     * ZF3 style factory proxy – just forwards to createService().
+     *
+     * @param ContainerInterface $container
+     * @param string             $requestedName
+     * @param null|array         $options
+     * @return NotificationListener
+     */
+    public function __invoke(ContainerInterface $container, $requestedName, array $options = null)
+    {
+        return $this->createService($container);
     }
 }
