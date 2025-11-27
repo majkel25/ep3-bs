@@ -196,8 +196,8 @@ class BookingController extends AbstractActionController
                 $this->flashMessenger()->addSuccessMessage(sprintf($this->t('%sCongratulations:%s Your %s has been booked!'),
                     '<b>', '</b>', $this->option('subject.square.type')));
 
-                // return $this->redirectBack()->toOrigin();
-                return $this->redirect()->toUrl('/');
+                return $this->redirectBack()->toOrigin();
+                //return $this->redirect()->toUrl('/');
             }
         }
 

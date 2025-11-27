@@ -178,8 +178,8 @@ class NotificationListener extends AbstractListenerAggregate
                 $user->need('email')
             );
 
-	        //$this->backendMailService->send($backendSubject, $message, array(), $addendum);
-            $this->backendMailService->send($backendSubject, $message, []);
+	        $this->backendMailService->send($backendSubject, $message, array(), $addendum);
+            //$this->backendMailService->send($backendSubject, $message, []);
         }
     }
 
@@ -259,8 +259,8 @@ class NotificationListener extends AbstractListenerAggregate
                 $user->need('email')
             );
 
-	        //$this->backendMailService->send($backendSubject, $message, array(), $addendum);
-            $this->backendMailService->send($backendSubject, $message, []);
+	        $this->backendMailService->send($backendSubject, $message, array(), $addendum);
+            //$this->backendMailService->send($backendSubject, $message, []);
         }
     }
 
