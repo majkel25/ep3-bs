@@ -27,12 +27,6 @@ class BookingInterestService
         $this->whatsApp = $whatsApp;
     }
 
-    /**
-     * Register a user's interest in a given date.
-     *
-     * @param int $userId
-     * @param \DateTimeInterface $date
-     */
     public function registerInterest($userId, \DateTimeInterface $date)
     {
         $userId = (int) $userId;
@@ -119,13 +113,14 @@ class BookingInterestService
         }
 
         $userIds = array_values(array_unique($userIds));
+        error_log('SSA BookingInterestService::notifyCancellation: userIds=' . implode(',', $userIds));
 
         if (empty($userIds)) {
-            error_log('SSA BookingInterestService::notifyCancellation: no userIds collected');
+            error_log('SSA BookingInterestService::notifyCancellation: no userIds resolved from interest rows');
             return;
         }
 
-        // ---- Fetch user contact data from bs_users ----
+        // ---- Fetch contact data for these users ----
         $users = $this->fetchUserContacts($userIds);
 
         if (empty($users)) {
@@ -146,8 +141,8 @@ class BookingInterestService
             $contact = $users[$uid];
 
             // Email
-            // SSA CHANGE: treat "registered interest" as full consent; send email if address exists
             if (! empty($contact['email'])) {
+            //if (! empty($contact['notify_cancel_email']) && ! empty($contact['email'])) {
                 $email = $contact['email'];
 
                 error_log(sprintf(
@@ -182,32 +177,30 @@ class BookingInterestService
                 && ! empty($contact['notify_cancel_whatsapp'])
                 && ! empty($contact['phone'])
             ) {
-                $phone = $contact['phone'];
-
                 error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d (%s)',
+                    'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d %s',
                     $uid,
-                    $phone
+                    $contact['phone']
                 ));
 
                 try {
-                    $this->sendWhatsApp($phone, $waUserText);
+                    $this->whatsApp->sendToNumber($contact['phone'], $waUserText);
                 } catch (\Throwable $e) {
                     error_log(sprintf(
-                        'SSA BookingInterestService::notifyCancellation: sendWhatsApp FAILED for %s: %s',
-                        $phone,
+                        'SSA BookingInterestService::notifyCancellation: WhatsApp send FAILED for uid=%d: %s',
+                        $uid,
                         $e->getMessage()
                     ));
                 }
             }
         }
 
-        // ---- Mark interest rows as notified ----
+        // ---- Mark notifications as sent for this date ----
         $now = (new \DateTime())->format('Y-m-d H:i:s');
 
         foreach ($rowList as $row) {
+            // support id or iid as primary key
             $pk = null;
-
             if (isset($row['id'])) {
                 $pk = (int) $row['id'];
             } elseif (isset($row['iid'])) {
@@ -215,154 +208,19 @@ class BookingInterestService
             }
 
             if ($pk !== null) {
-                try {
-                    $this->tg->update(
-                        ['notified_at' => $now],
-                        ['id' => $pk]
-                    );
-
-                    error_log('SSA BookingInterestService::notifyCancellation: marked notified_at for interest id=' . $pk);
-                } catch (\Throwable $e) {
-                    error_log(sprintf(
-                        'SSA BookingInterestService::notifyCancellation: FAILED to update notified_at for interest id=%d: %s',
-                        $pk,
-                        $e->getMessage()
-                    ));
-                }
+                $this->tg->update(
+                    ['notified_at' => $now],
+                    ['id' => $pk]
+                );
             }
         }
-
-        error_log('SSA BookingInterestService::notifyCancellation END');
     }
 
     /**
-     * Build the email body for the “free slot” notification.
+     * Load contact data for a set of user IDs.
      *
-     * @param array $booking
-     * @return string
-     */
-    protected function buildEmailBody(array $booking)
-    {
-        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
-        $when   = $this->formatSlot($booking);
-
-        // IMPORTANT: handle DateTime OR string safely
-        if (isset($booking['start'])) {
-            $start = $booking['start'];
-
-            if ($start instanceof \DateTimeInterface) {
-                $when = $start->format('l, d.m.Y H:i');
-            } else {
-                try {
-                    $dt = new \DateTime((string) $start);
-                    $when = $dt->format('l, d.m.Y H:i');
-                } catch (\Exception $e) {
-                    // keep default
-                }
-            }
-        }
-
-        $body  = "Good news!\n\n";
-        $body .= "A booking has just been cancelled for {$square}.\n";
-        $body .= "Date and time: {$when}\n\n";
-        $body .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
-        $body .= "Best regards,\n";
-        $body .= "Surrey Snooker Academy\n";
-
-        return $body;
-    }
-
-    /**
-     * Build a short WhatsApp text for the user.
-     *
-     * @param array $booking
-     * @return string
-     */
-    protected function buildWhatsAppUserText(array $booking)
-    {
-        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
-        $when   = $this->formatSlot($booking);
-
-        if (isset($booking['start'])) {
-            $start = $booking['start'];
-
-            if ($start instanceof \DateTimeInterface) {
-                $when = $start->format('d.m.Y H:i');
-            } else {
-                try {
-                    $dt = new \DateTime((string) $start);
-                    $when = $dt->format('d.m.Y H:i');
-                } catch (\Exception $e) {
-                    // keep default
-                }
-            }
-        }
-
-        $text  = "Free slot available at Surrey Snooker Academy!\n";
-        $text .= "{$square}, {$when}\n";
-        $text .= "Book now via the SSA booking system.";
-
-        return $text;
-    }
-
-    /**
-     * Simple helper to format the slot.
-     *
-     * @param array $booking
-     * @return string
-     */
-    protected function formatSlot(array $booking)
-    {
-        if (isset($booking['start']) && $booking['start'] instanceof \DateTimeInterface) {
-            $start = $booking['start'];
-            return $start->format('d.m.Y H:i');
-        }
-
-        return 'the selected date/time';
-    }
-
-    /**
-     * Send an email using the configured transport.
-     *
-     * @param string $to
-     * @param string $body
-     */
-    protected function sendEmail($to, $body)
-    {
-        $fromEmail = isset($this->mailCfg['from_email']) ? $this->mailCfg['from_email'] : 'no-reply@example.com';
-        $fromName  = isset($this->mailCfg['from_name']) ? $this->mailCfg['from_name'] : 'Booking System';
-        $subject   = isset($this->mailCfg['subject']) ? $this->mailCfg['subject'] : 'A free slot is now available';
-
-        $message = new Message();
-        $message->setFrom($fromEmail, $fromName);
-        $message->addTo($to);
-        $message->setSubject($subject);
-        $message->setBody($body);
-
-        $this->mail->send($message);
-    }
-
-    /**
-     * Send a WhatsApp message (if integration is provided).
-     *
-     * @param string $phone
-     * @param string $text
-     */
-    protected function sendWhatsApp($phone, $text)
-    {
-        if (! $this->whatsApp) {
-            return;
-        }
-
-        // $this->whatsApp is expected to be some kind of client, injected via factory
-        $this->whatsApp->sendMessage($phone, $text);
-    }
-
-    /**
-     * Fetch user contact data (email/phone + notification flags).
-     *
-     * @param array $userIds
-     * @return array [uid => [email, phone, notify_cancel_email, notify_cancel_whatsapp]]
+     * @param int[] $userIds
+     * @return array uid => [email, phone, notify_cancel_email, notify_cancel_whatsapp]
      */
     protected function fetchUserContacts(array $userIds)
     {
@@ -392,5 +250,111 @@ class BookingInterestService
         }
 
         return $map;
+    }
+
+    /**
+     * Build the email body for the “free slot” notification.
+     *
+     * @param array $booking
+     * @return string
+     */
+    protected function buildEmailBody(array $booking)
+    {
+        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
+        $when   = $this->formatSlot($booking);
+
+        // IMPORTANT: handle DateTime OR string safely
+        if (isset($booking['start'])) {
+            if ($booking['start'] instanceof \DateTimeInterface) {
+                $startDate = $booking['start'];
+            } else {
+                $startDate = new \DateTime($booking['start']);
+            }
+        } else {
+            $startDate = null;
+        }
+
+        $dateLine = $startDate ? $startDate->format('Y-m-d') : 'selected day';
+
+        $body  = "Hello,\n\n";
+        $body .= "A booking on {$square} for {$when} was cancelled.\n";
+        $body .= "A slot may now be available on the day you are watching.\n\n";
+        $body .= "Watched date: {$dateLine}\n";
+        $body .= "Court: {$square}\n";
+        if (isset($booking['id'])) {
+            $body .= "Reference: " . $booking['id'] . "\n";
+        }
+        $body .= "\nPlease open the booking system to try and reserve the freed slot.\n\n";
+        $body .= "This is a one-time notification for this day.\n";
+
+        return $body;
+    }
+
+    protected function sendEmail($to, $body)
+    {
+        $message = new Message();
+        $message->setSubject('Booking cancelled – a slot may be free');
+        $message->addTo($to);
+
+        $fromAddress = isset($this->mailCfg['address'])
+            ? $this->mailCfg['address']
+            : 'no-reply@example.com';
+
+        $message->setFrom($fromAddress, 'Bookings');
+        $message->setBody($body);
+
+        $this->mail->send($message);
+    }
+
+    protected function buildWhatsAppUserText(array $booking)
+    {
+        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
+        $when   = $this->formatSlot($booking);
+
+        $text  = "Booking alert \xF0\x9F\x94\x94\n"; // 🔔
+        $text .= "A booking on {$square} for {$when} was cancelled.\n\n";
+        $text .= "There may be a free slot now – open the booking system and try to reserve it.";
+
+        return $text;
+    }
+
+    protected function formatSlot(array $booking)
+    {
+        $start = isset($booking['start']) ? $booking['start'] : null;
+        $end   = isset($booking['end']) ? $booking['end'] : null;
+
+        if (! $start) {
+            return 'selected time';
+        }
+
+        if ($start instanceof \DateTimeInterface) {
+            $s = $start;
+        } else {
+            $s = new \DateTime($start);
+        }
+
+        if ($end) {
+            if ($end instanceof \DateTimeInterface) {
+                $e = $end;
+            } else {
+                $e = new \DateTime($end);
+            }
+            return $s->format('Y-m-d H:i') . ' – ' . $e->format('H:i');
+        }
+
+        return $s->format('Y-m-d');
+    }
+
+    /**
+     * Optional housekeeping: remove old/used interests.
+     *
+     * @param int $days Age in days
+     * @return int rows deleted
+     */
+    public function cleanupOldInterests($days = 30)
+    {
+        $cutoff = (new \DateTime("-{$days} days"))->format('Y-m-d');
+
+        return $this->tg->delete("interest_date < '{$cutoff}' OR notified_at IS NOT NULL");
     }
 }
