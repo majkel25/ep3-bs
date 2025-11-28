@@ -148,6 +148,18 @@ class NotificationListener extends AbstractListenerAggregate
             );
         $vCalendar->addComponent($vEvent);
 
+        // Convert to ICS file content
+        $icsContent = $vCalendar->render(); 
+
+        // MailService expects array of attachments:
+        $attachments = [
+            [
+                'name'     => 'booking.ics',
+                'type'     => 'text/calendar',
+                'content'  => $icsContent,
+            ],
+        ];
+
         // Friendly subject:
         $subject = sprintf(
             'Your booking for %s %s',
@@ -188,8 +200,11 @@ class NotificationListener extends AbstractListenerAggregate
         $this->userMailService->send(
             $user,
             $subject,
-            $message
+            $message,
+            $attachments
         );
+
+ 
 
         // Notify backend
         $backendSubject = sprintf(
