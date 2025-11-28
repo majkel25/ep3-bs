@@ -415,7 +415,9 @@ class NotificationListener extends AbstractListenerAggregate
     // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
     // ---------------------------------------------------------
     $notifySms = (int) $user->get('notify_cancel_whatsapp');
-    $phone     = $user->getMeta('phone'); 
+    //$phone     = $user->getMeta('phone');
+    $rawPhone = $user->getMeta('phone');
+    $phone    = $this->normalizeUkNumber($rawPhone);
 
     if ($notifySms === 1 && $phone) {
 
@@ -429,6 +431,7 @@ class NotificationListener extends AbstractListenerAggregate
                     $user,
                     'DEBUG: SMS branch hit',
                     "Would send SMS to: {$phone}\n\nMessage:\n{$smsBody}"
+                    "Would send SMS to: {$phone} (raw: {$rawPhone})"
                 );
 
             $this->sendTwilioSms($phone, $smsBody);  

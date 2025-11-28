@@ -390,4 +390,25 @@ class BookingInterestService
         }
     }
 }
+
+protected function normalizeUkNumber($number)
+{
+    $number = preg_replace('/\D+/', '', $number);   // strip everything except digits
+
+    if (strpos($number, '0') === 0) {
+        // convert 07xxxxxxx to +447xxxxxxx
+        return '+44' . substr($number, 1);
+    }
+
+    if (strpos($number, '44') === 0) {
+        // convert 44xxxxxxx to +44xxxxxxx
+        return '+' . $number;
+    }
+
+    if (strpos($number, '+44') === 0) {
+        return $number;
+    }
+
+    // fallback: assume UK, force to +44
+    return '+44' . $number;
 }
