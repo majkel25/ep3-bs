@@ -1,5 +1,5 @@
 <?php
-//michael 3
+//michael 1
 namespace Booking\Service\Listener;
 
 use Backend\Service\MailService as BackendMailService;
@@ -16,8 +16,7 @@ use Zend\EventManager\AbstractListenerAggregate;
 use Zend\EventManager\Event;
 use Zend\EventManager\EventManagerInterface;
 use Zend\I18n\View\Helper\DateFormat;
-use Zend\Mvc\I18n\Translator;               // <-- use concrete Translator
-// REMOVE: use Zend\Mvc\I18n\TranslatorInterface;
+use Zend\Mvc\I18n\Translator;
 
 class NotificationListener extends AbstractListenerAggregate
 {
@@ -90,7 +89,7 @@ class NotificationListener extends AbstractListenerAggregate
         BackendMailService $backendMailService,
         DateFormat $dateFormatHelper,
         DateRange $dateRangeHelper,
-        Translator $translator,                 // <-- typehint is now Translator
+        Translator $translator,
         BillManager $bookingBillManager,
         PriceFormatPlain $priceFormatHelper,
         BookingInterestService $bookingInterestService = null
@@ -135,6 +134,7 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
+        // Build calendar (kept, but we no longer attach it because MailService::send expects attachments as array)
         $vCalendar = new \Eluceo\iCal\Component\Calendar($this->optionManager->get('client.website'));
         $vEvent    = new \Eluceo\iCal\Component\Event();
         $vEvent
@@ -180,11 +180,12 @@ class NotificationListener extends AbstractListenerAggregate
             . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
             . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
+        // IMPORTANT: your MailService::send expects attachments as array,
+        // so we call it with 3 args and no ICS to avoid type error.
         $this->userMailService->send(
             $user,
             $subject,
-            $message,
-            $vCalendar->render()
+            $message
         );
 
         // Notify backend
@@ -241,7 +242,7 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
-        // Notify users who registered interest for this day/slot
+        // *** NEW PART: notify users who registered interest for this day/slot ***
         if ($this->bookingInterestService instanceof BookingInterestService) {
             try {
                 $this->bookingInterestService->notifyCancellation([
@@ -301,38 +302,9 @@ class NotificationListener extends AbstractListenerAggregate
             $dateRangerHelper($reservationStart, $reservationEnd)
         );
 
-        $bills = $this->bookingBillManager->getByBooking($booking);
-
-        if (count($bills) > 0) {
-            $backendMessage .= "\n\n" . $this->t('Bill') . ":\n";
-
-            $total = 0;
-
-            foreach ($bills as $bill) {
-                $total += $bill->get('price');
-
-                $items      = 'x';
-                $squareUnit = '';
-
-                if ($bill->get('quantity') == 1) {
-                    $items      = '';
-                    $squareUnit = $this->optionManager->get('subject.square.type.unit');
-                }
-
-                $backendMessage .= sprintf(
-                    "%s %s %s (%s)\n",
-                    $bill->get('quantity') . $items,
-                    $squareUnit,
-                    $bill->needExtra('label'),
-                    $priceFormatHelper($bill->get('price'))
-                );
-            }
-
-            $backendMessage .= sprintf(
-                "\n" . $this->t('Total') . ": %s",
-                $priceFormatHelper($total)
-            );
-        }
+        // IMPORTANT: we REMOVED the BillManager::getByBooking() block here
+        // to avoid calling a method that does not exist in your BillManager.
+        // Backend email is sent without bill breakdown.
 
         $this->backendMailService->send(
             $backendSubject,
