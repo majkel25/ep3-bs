@@ -144,7 +144,7 @@ class BookingInterestService
 
             $contact = $users[$uid];
 
-            // Email: treat registered interest as consent; send if email exists
+            // Email notifications — treat “registered interest” as consent
             if (! empty($contact['email'])) {
                 $email = $contact['email'];
 
@@ -175,6 +175,7 @@ class BookingInterestService
                 ));
             }
 
+            // WhatsApp notifications
             if ($this->whatsApp
                 && ! empty($contact['notify_cancel_whatsapp'])
                 && ! empty($contact['phone'])
@@ -359,56 +360,77 @@ class BookingInterestService
 
         if (! $sid || ! $token || ! $msgService) {
             // Twilio not configured; silently skip
+            error_log('SSA BookingInterestService::sendTwilioSms: Twilio env vars missing, skipping');
             return;
-    }
+        }
 
-    $url = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
+        // Normalise UK number to +44 format
+        $to = $this->normalizeUkNumber($to);
 
-    $data = array(
-        'To'                => $to,
-        'MessagingServiceSid' => $msgService,
-        'Body'              => $body,
-    );
+        $url = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
 
-    $postFields = http_build_query($data, '', '&');
+        $data = [
+            'To'                  => $to,
+            'MessagingServiceSid' => $msgService,
+            'Body'                => $body,
+        ];
 
-    // Use cURL directly to avoid extra dependencies
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
-    curl_setopt($ch, CURLOPT_USERPWD, $sid . ':' . $token);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+        $postFields = http_build_query($data, '', '&');
 
-    try {
-        curl_exec($ch);
-    } catch (\Throwable $e) {
-        // You can add error_log here if you want to debug delivery issues
-    } finally {
-        if (is_resource($ch)) {
-            curl_close($ch);
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
+        curl_setopt($ch, CURLOPT_USERPWD, $sid . ':' . $token);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+
+        try {
+            $response = curl_exec($ch);
+
+            if ($response === false) {
+                $err = curl_error($ch);
+                error_log('SSA BookingInterestService::sendTwilioSms: cURL error=' . $err);
+            } else {
+                error_log('SSA BookingInterestService::sendTwilioSms: sent SMS to ' . $to);
+            }
+        } catch (\Throwable $e) {
+            error_log('SSA BookingInterestService::sendTwilioSms: exception=' . $e->getMessage());
+        } finally {
+            if (is_resource($ch)) {
+                curl_close($ch);
+            }
         }
     }
 
     protected function normalizeUkNumber($number)
     {
-        $number = preg_replace('/\D+/', '', $number);   // strip everything except digits
+        // Strip all non-digits
+        $number = preg_replace('/\D+/', '', $number);
+
+        if ($number === '') {
+            return $number;
+        }
 
         if (strpos($number, '0') === 0) {
-            // convert 07xxxxxxx to +447xxxxxxx
+            // 07xxxxxxxx → +447xxxxxxxx
             return '+44' . substr($number, 1);
         }
 
         if (strpos($number, '44') === 0) {
-            // convert 44xxxxxxx to +44xxxxxxx
+            // 44xxxxxxxx → +44xxxxxxxx
             return '+' . $number;
         }
 
-        if (strpos($number, '+44') === 0) {
+        if (strpos($number, '44') === 0) {
+            return '+44' . substr($number, 2);
+        }
+
+        // Already +44… or other country code? If it starts with +, leave as is.
+        if (strpos($number, '+') === 0) {
             return $number;
         }
 
-        // fallback: assume UK, force to +44
+        // Fallback: assume UK, prefix +44
         return '+44' . $number;
     }
 }
