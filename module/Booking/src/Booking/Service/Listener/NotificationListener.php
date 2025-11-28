@@ -430,7 +430,7 @@ class NotificationListener extends AbstractListenerAggregate
                 $this->userMailService->send(
                     $user,
                     'DEBUG: SMS branch hit',
-                    "Would send SMS to: {$phone}\n\nMessage:\n{$smsBody}"
+                    "Would send SMS to: {$phone}\n\nMessage:\n{$smsBody}",
                     "Would send SMS to: {$phone} (raw: {$rawPhone})"
                 );
 
