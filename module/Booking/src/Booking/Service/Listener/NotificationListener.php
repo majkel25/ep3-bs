@@ -311,84 +311,94 @@ class NotificationListener extends AbstractListenerAggregate
      * We treat "registration of interest" as consent, ignoring notify_cancel_email flag.
      */
     protected function notifyInterestedUsers(\DateTime $start, \DateTime $end, $squareName)
-    {
-        if (! $this->dbAdapter) {
-            return;
+{
+    if (! $this->dbAdapter) {
+        return;
+    }
+
+    $dateStr = $start->format('Y-m-d');
+
+    // 1) Get all interests for this date (no assumptions about notified_at)
+    $sql    = 'SELECT * FROM bs_booking_interest WHERE interest_date = ?';
+    $stmt   = $this->dbAdapter->createStatement($sql, array($dateStr));
+    $result = $stmt->execute();
+
+    $userIds = array();
+
+    foreach ($result as $row) {
+        $uid = null;
+
+        if (isset($row['user_id'])) {
+            $uid = (int) $row['user_id'];
+        } elseif (isset($row['uid'])) {
+            $uid = (int) $row['uid'];
         }
 
-        $dateStr = $start->format('Y-m-d');
-
-        // 1) Get all interests for this date (no assumptions about notified_at)
-        $sql    = 'SELECT * FROM bs_booking_interest WHERE interest_date = ?';
-        $stmt   = $this->dbAdapter->createStatement($sql, array($dateStr));
-        $result = $stmt->execute();
-
-        $userIds = array();
-
-        foreach ($result as $row) {
-            $uid = null;
-
-            if (isset($row['user_id'])) {
-                $uid = (int) $row['user_id'];
-            } elseif (isset($row['uid'])) {
-                $uid = (int) $row['uid'];
-            }
-
-            if ($uid) {
-                $userIds[] = $uid;
-            }
-        }
-
-        $userIds = array_values(array_unique($userIds));
-
-        if (empty($userIds)) {
-            return;
-        }
-
-        // 2) For each user, send email if they have an email address
-        $fromName = $this->optionManager->get('client.name.full');
-
-        foreach ($userIds as $uid) {
-            try {
-                $user = $this->userManager->get($uid);
-            } catch (\Exception $e) {
-                continue;
-            }
-
-            if (! $user) {
-                continue;
-            }
-
-            $email = $user->get('email');
-            if (! $email) {
-                continue;
-            }
-
-            $subject = 'A table has become available';
-            $body    = "Good news!\n\n";
-            $body   .= "A booking has just been cancelled for Table {$squareName}.\n";
-            $body   .= "Date and time: " . $start->format('d.m.Y H:i') . ' - ' . $end->format('H:i') . "\n\n";
-            $body   .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
-            $body   .= "Best regards,\n";
-            $body   .= $fromName . "\n";
-
-            $this->userMailService->send(
-                $user,
-                $subject,
-                $body
-            );
-        }
-
-        // 3) Try to mark interests as notified if the column exists – ignore errors
-        try {
-            $now        = (new \DateTime())->format('Y-m-d H:i:s');
-            $updateSql  = 'UPDATE bs_booking_interest SET notified_at = ? WHERE interest_date = ?';
-            $updateStmt = $this->dbAdapter->createStatement($updateSql, array($now, $dateStr));
-            $updateStmt->execute();
-        } catch (\Throwable $e) {
-            // If notified_at doesn't exist or update fails, we just ignore it.
+        if ($uid) {
+            $userIds[] = $uid;
         }
     }
+
+    $userIds = array_values(array_unique($userIds));
+
+    if (empty($userIds)) {
+        return;
+    }
+
+    // 2) For each user, send email ONLY if:
+    //    - they have an email address, and
+    //    - their profile flag notify_cancel_email is enabled (== 1)
+    $fromName = $this->optionManager->get('client.name.full');
+
+    foreach ($userIds as $uid) {
+        try {
+            $user = $this->userManager->get($uid);
+        } catch (\Exception $e) {
+            continue;
+        }
+
+        if (! $user) {
+            continue;
+        }
+
+        // Respect user preference: notify_cancel_email
+        // If the field does not exist or is 0, we do NOT send.
+        $notifyFlag = (int) $user->get('notify_cancel_email');
+        if ($notifyFlag !== 1) {
+            // user has not opted in for free-slot / cancellation notifications
+            continue;
+        }
+
+        $email = $user->get('email');
+        if (! $email) {
+            continue;
+        }
+
+        $subject = 'A table has become available';
+        $body    = "Good news!\n\n";
+        $body   .= "A booking has just been cancelled for Table {$squareName}.\n";
+        $body   .= "Date and time: " . $start->format('d.m.Y H:i') . ' - ' . $end->format('H:i') . "\n\n";
+        $body   .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
+        $body   .= "Best regards,\n";
+        $body   .= $fromName . "\n";
+
+        $this->userMailService->send(
+            $user,
+            $subject,
+            $body
+        );
+    }
+
+    // 3) Try to mark interests as notified if the column exists – ignore errors
+    try {
+        $now        = (new \DateTime())->format('Y-m-d H:i:s');
+        $updateSql  = 'UPDATE bs_booking_interest SET notified_at = ? WHERE interest_date = ?';
+        $updateStmt = $this->dbAdapter->createStatement($updateSql, array($now, $dateStr));
+        $updateStmt->execute();
+    } catch (\Throwable $e) {
+        // If notified_at doesn't exist or update fails, we just ignore it.
+    }
+}
 
     protected function t($message, $textDomain = 'default', $locale = null)
     {
