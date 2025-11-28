@@ -424,8 +424,7 @@ class NotificationListener extends AbstractListenerAggregate
             $smsBody .= "Time: {$dateLine}, {$timeRange}.\n";
             $smsBody .= "Log in to SSA bookings to reserve it.";
 
-            $this->sendTwilioSms($phone, $smsBody);
-        }
+            $this->sendTwilioSms($phone, $smsBody);  
     }
 
     // 3) Try to mark interests as notified if the column exists – ignore errors
