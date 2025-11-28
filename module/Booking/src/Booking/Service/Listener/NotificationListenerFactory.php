@@ -2,6 +2,7 @@
 
 namespace Booking\Service\Listener;
 
+use Backend\Service\MailService as BackendMailService;
 use Base\Manager\OptionManager;
 use Base\View\Helper\DateRange;
 use Base\View\Helper\PriceFormatPlain;
@@ -12,48 +13,111 @@ use Square\Manager\SquareManager;
 use User\Manager\UserManager;
 use User\Service\MailService as UserMailService;
 use Zend\I18n\View\Helper\DateFormat;
-use Zend\Mvc\I18n\Translator;
+use Zend\Mvc\I18n\TranslatorInterface;
 use Zend\ServiceManager\FactoryInterface;
 use Zend\ServiceManager\ServiceLocatorInterface;
-use Backend\Service\MailService as BackendMailService;
 
 class NotificationListenerFactory implements FactoryInterface
 {
-    public function createService(ServiceLocatorInterface $sm)
+    /**
+     * Create NotificationListener service.
+     *
+     * @param ServiceLocatorInterface|null $serviceLocator
+     * @return NotificationListener
+     */
+    public function createService(ServiceLocatorInterface $serviceLocator = null)
     {
-        /** @var OptionManager $optionManager */
-        $optionManager      = $sm->get('Base\Manager\OptionManager');
-        /** @var ReservationManager $reservationManager */
-        $reservationManager = $sm->get('Booking\Manager\ReservationManager');
-        /** @var SquareManager $squareManager */
-        $squareManager      = $sm->get('Square\Manager\SquareManager');
-        /** @var UserManager $userManager */
-        $userManager        = $sm->get('User\Manager\UserManager');
-        /** @var UserMailService $userMailService */
-        $userMailService    = $sm->get('User\Service\MailService');
-        /** @var BackendMailService $backendMailService */
-        $backendMailService = $sm->get('Backend\Service\MailService');
-        /** @var DateFormat $dateFormatHelper */
-        $dateFormatHelper   = $sm->get('ViewHelperManager')->get('DateFormat');
-        /** @var DateRange $dateRangeHelper */
-        $dateRangeHelper    = $sm->get('ViewHelperManager')->get('DateRange');
-        /** @var Translator $translator */
-        $translator         = $sm->get('Translator');
-        /** @var BillManager $bookingBillManager */
-        $bookingBillManager = $sm->get('Booking\Manager\Booking\BillManager');
-        /** @var PriceFormatPlain $priceFormatHelper */
-        $priceFormatHelper  = $sm->get('ViewHelperManager')->get('PriceFormatPlain');
+        // In some contexts (older ZF / plugin managers), this factory may be called in a weird way.
+        // Make sure we always end up with a real root service manager if possible.
+        if ($serviceLocator && method_exists($serviceLocator, 'getServiceLocator')) {
+            $root = $serviceLocator->getServiceLocator();
+            if ($root) {
+                $serviceLocator = $root;
+            }
+        }
 
-    
-            /** @var BookingInterestService|null $bookingInterestService */
+        // Absolute last-resort defence: if somehow still null, we log it and continue WITHOUT optional services.
+        if ($serviceLocator === null) {
+            error_log('NotificationListenerFactory: serviceLocator is NULL, proceeding with minimal wiring.');
+        }
+
+        /** @var OptionManager $optionManager */
+        $optionManager = $serviceLocator
+            ? $serviceLocator->get(OptionManager::class)
+            : null;
+
+        /** @var ReservationManager $reservationManager */
+        $reservationManager = $serviceLocator
+            ? $serviceLocator->get(ReservationManager::class)
+            : null;
+
+        /** @var SquareManager $squareManager */
+        $squareManager = $serviceLocator
+            ? $serviceLocator->get(SquareManager::class)
+            : null;
+
+        /** @var UserManager $userManager */
+        $userManager = $serviceLocator
+            ? $serviceLocator->get(UserManager::class)
+            : null;
+
+        /** @var UserMailService $userMailService */
+        $userMailService = $serviceLocator
+            ? $serviceLocator->get(UserMailService::class)
+            : null;
+
+        /** @var BackendMailService $backendMailService */
+        $backendMailService = $serviceLocator
+            ? $serviceLocator->get(BackendMailService::class)
+            : null;
+
+        // View helpers
+        $viewHelperManager = $serviceLocator
+            ? $serviceLocator->get('ViewHelperManager')
+            : null;
+
+        /** @var DateFormat $dateFormatHelper */
+        $dateFormatHelper = $viewHelperManager
+            ? $viewHelperManager->get('dateFormat')
+            : null;
+
+        /** @var DateRange $dateRangeHelper */
+        $dateRangeHelper = $viewHelperManager
+            ? $viewHelperManager->get('dateRange')
+            : null;
+
+        /** @var PriceFormatPlain $priceFormatHelper */
+        $priceFormatHelper = $viewHelperManager
+            ? $viewHelperManager->get('priceFormatPlain')
+            : null;
+
+        /** @var TranslatorInterface $translator */
+        $translator = $serviceLocator
+            ? $serviceLocator->get('MvcTranslator')
+            : null;
+
+        /** @var BillManager $bookingBillManager */
+        $bookingBillManager = $serviceLocator
+            ? $serviceLocator->get(BillManager::class)
+            : null;
+
+        /** @var BookingInterestService|null $bookingInterestService */
         $bookingInterestService = null;
+        if ($serviceLocator) {
             try {
                 $bookingInterestService = $serviceLocator->get(BookingInterestService::class);
             } catch (\Exception $e) {
                 // Optional service; log and continue without it
                 error_log('BookingInterestService unavailable: ' . $e->getMessage());
             }
+        } else {
+            // If we ever see this, we know why interest notifications are not wired
+            error_log('NotificationListenerFactory: cannot resolve BookingInterestService because serviceLocator is NULL');
+        }
 
+        // Build listener. If any of the required deps somehow ended up null,
+        // they will cause a clearer error at construction time, but at least
+        // we’re not failing on a null ->get() any more.
         return new NotificationListener(
             $optionManager,
             $reservationManager,
