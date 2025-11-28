@@ -366,7 +366,7 @@ class NotificationListener extends AbstractListenerAggregate
 
             $subject = 'A table has become available';
             $body    = "Good news!\n\n";
-            $body   .= "A booking has just been cancelled for {$squareName}.\n";
+            $body   .= "A booking has just been cancelled for Table {$squareName}.\n";
             $body   .= "Date and time: " . $start->format('d.m.Y H:i') . ' - ' . $end->format('H:i') . "\n\n";
             $body   .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
             $body   .= "Best regards,\n";
