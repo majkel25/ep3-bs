@@ -1,5 +1,5 @@
 <?php
-//michael 2
+//michael 3
 namespace Booking\Service\Listener;
 
 use Backend\Service\MailService as BackendMailService;
@@ -16,8 +16,8 @@ use Zend\EventManager\AbstractListenerAggregate;
 use Zend\EventManager\Event;
 use Zend\EventManager\EventManagerInterface;
 use Zend\I18n\View\Helper\DateFormat;
-use Zend\Mvc\I18n\Translator;
-use Zend\Mvc\I18n\TranslatorInterface;
+use Zend\Mvc\I18n\Translator;               // <-- use concrete Translator
+// REMOVE: use Zend\Mvc\I18n\TranslatorInterface;
 
 class NotificationListener extends AbstractListenerAggregate
 {
@@ -62,7 +62,7 @@ class NotificationListener extends AbstractListenerAggregate
     protected $dateRangeHelper;
 
     /**
-     * @var TranslatorInterface
+     * @var Translator
      */
     protected $translator;
 
@@ -90,7 +90,7 @@ class NotificationListener extends AbstractListenerAggregate
         BackendMailService $backendMailService,
         DateFormat $dateFormatHelper,
         DateRange $dateRangeHelper,
-        TranslatorInterface $translator,
+        Translator $translator,                 // <-- typehint is now Translator
         BillManager $bookingBillManager,
         PriceFormatPlain $priceFormatHelper,
         BookingInterestService $bookingInterestService = null
