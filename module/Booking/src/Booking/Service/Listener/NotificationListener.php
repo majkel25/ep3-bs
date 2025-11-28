@@ -8,10 +8,10 @@ use Base\View\Helper\DateRange;
 use Base\View\Helper\PriceFormatPlain;
 use Booking\Manager\Booking\BillManager;
 use Booking\Manager\ReservationManager;
-use Service\Service\BookingInterestService;
 use Square\Manager\SquareManager;
 use User\Manager\UserManager;
 use User\Service\MailService as UserMailService;
+use Zend\Db\Adapter\Adapter;
 use Zend\EventManager\AbstractListenerAggregate;
 use Zend\EventManager\Event;
 use Zend\EventManager\EventManagerInterface;
@@ -76,9 +76,9 @@ class NotificationListener extends AbstractListenerAggregate
     protected $priceFormatHelper;
 
     /**
-     * @var BookingInterestService|null
+     * @var Adapter
      */
-    protected $bookingInterestService;
+    protected $dbAdapter;
 
     public function __construct(
         OptionManager $optionManager,
@@ -92,20 +92,20 @@ class NotificationListener extends AbstractListenerAggregate
         Translator $translator,
         BillManager $bookingBillManager,
         PriceFormatPlain $priceFormatHelper,
-        BookingInterestService $bookingInterestService = null
+        Adapter $dbAdapter
     ) {
-        $this->optionManager          = $optionManager;
-        $this->reservationManager     = $reservationManager;
-        $this->squareManager          = $squareManager;
-        $this->userManager            = $userManager;
-        $this->userMailService        = $userMailService;
-        $this->backendMailService     = $backendMailService;
-        $this->bookingBillManager     = $bookingBillManager;
-        $this->bookingInterestService = $bookingInterestService;
-        $this->dateFormatHelper       = $dateFormatHelper;
-        $this->dateRangeHelper        = $dateRangeHelper;
-        $this->translator             = $translator;
-        $this->priceFormatHelper      = $priceFormatHelper;
+        $this->optionManager      = $optionManager;
+        $this->reservationManager = $reservationManager;
+        $this->squareManager      = $squareManager;
+        $this->userManager        = $userManager;
+        $this->userMailService    = $userMailService;
+        $this->backendMailService = $backendMailService;
+        $this->bookingBillManager = $bookingBillManager;
+        $this->dateFormatHelper   = $dateFormatHelper;
+        $this->dateRangeHelper    = $dateRangeHelper;
+        $this->translator         = $translator;
+        $this->priceFormatHelper  = $priceFormatHelper;
+        $this->dbAdapter          = $dbAdapter;
     }
 
     public function attach(EventManagerInterface $events)
@@ -134,7 +134,7 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
-        // Build calendar (kept, but we no longer attach it because MailService::send expects attachments as array)
+        // Calendar is kept but not attached, as MailService::send expects attachments array
         $vCalendar = new \Eluceo\iCal\Component\Calendar($this->optionManager->get('client.website'));
         $vEvent    = new \Eluceo\iCal\Component\Event();
         $vEvent
@@ -146,7 +146,6 @@ class NotificationListener extends AbstractListenerAggregate
                 . ' - Snooker Booking - Table '
                 . $square->need('name')
             );
-
         $vCalendar->addComponent($vEvent);
 
         $subject = sprintf(
@@ -180,8 +179,7 @@ class NotificationListener extends AbstractListenerAggregate
             . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
             . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
-        // IMPORTANT: your MailService::send expects attachments as array,
-        // so we call it with 3 args and no ICS to avoid type error.
+        // Use the existing signature: user, subject, message (no attachments)
         $this->userMailService->send(
             $user,
             $subject,
@@ -242,23 +240,22 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
-        // *** NEW PART: notify users who registered interest for this day/slot ***
-        if ($this->bookingInterestService instanceof BookingInterestService) {
-            try {
-                $this->bookingInterestService->notifyCancellation([
-                    'id'          => $booking->need('bid'),
-                    'start'       => $reservationStart,
-                    'end'         => $reservationEnd,
-                    'square_name' => $square->need('name'),
-                ]);
-            } catch (\Throwable $e) {
-                error_log(
-                    'SSA NotificationListener::onCancelSingle notifyCancellation failed: ' .
-                    $e->getMessage()
-                );
-            }
+        // === NEW: notify all users who registered interest for this date ===
+        try {
+            $this->notifyInterestedUsers(
+                $reservationStart,
+                $reservationEnd,
+                $square->need('name')
+            );
+        } catch (\Throwable $e) {
+            // Do not break cancellation flow if interest notification fails
+            error_log(
+                'SSA NotificationListener::onCancelSingle notifyInterestedUsers failed: ' .
+                $e->getMessage()
+            );
         }
 
+        // === Existing cancellation email to booking owner ===
         $subject = sprintf(
             $this->t('Your %s-booking has been cancelled'),
             $this->optionManager->get('subject.square.type')
@@ -302,14 +299,85 @@ class NotificationListener extends AbstractListenerAggregate
             $dateRangerHelper($reservationStart, $reservationEnd)
         );
 
-        // IMPORTANT: we REMOVED the BillManager::getByBooking() block here
+        // The old BillManager::getByBooking() block is intentionally removed
         // to avoid calling a method that does not exist in your BillManager.
-        // Backend email is sent without bill breakdown.
 
         $this->backendMailService->send(
             $backendSubject,
             $backendMessage
         );
+    }
+
+    /**
+     * Notify users who registered interest for the day of this cancellation.
+     * We treat "registration of interest" as consent, ignoring notify_cancel_email flag.
+     */
+    protected function notifyInterestedUsers(\DateTime $start, \DateTime $end, $squareName)
+    {
+        if (! $this->dbAdapter) {
+            return;
+        }
+
+        $dateStr = $start->format('Y-m-d');
+
+        // 1) Get all interests for this date which haven't been notified yet
+        $sql      = 'SELECT user_id FROM bs_booking_interest WHERE interest_date = ? AND (notified_at IS NULL OR notified_at = "0000-00-00 00:00:00")';
+        $stmt     = $this->dbAdapter->createStatement($sql, array($dateStr));
+        $result   = $stmt->execute();
+        $userIds  = array();
+
+        foreach ($result as $row) {
+            if (isset($row['user_id'])) {
+                $userIds[] = (int) $row['user_id'];
+            }
+        }
+
+        $userIds = array_values(array_unique($userIds));
+
+        if (empty($userIds)) {
+            return;
+        }
+
+        // 2) For each user, send email if they have an email address
+        $fromName = $this->optionManager->get('client.name.full');
+
+        foreach ($userIds as $uid) {
+            try {
+                $user = $this->userManager->get($uid);
+            } catch (\Exception $e) {
+                continue;
+            }
+
+            if (! $user) {
+                continue;
+            }
+
+            $email = $user->get('email');
+            if (! $email) {
+                continue;
+            }
+
+            $subject = 'A table has become available';
+            $body    = "Good news!\n\n";
+            $body   .= "A booking has just been cancelled for {$squareName}.\n";
+            $body   .= "Date and time: " . $start->format('d.m.Y H:i') . ' - ' . $end->format('H:i') . "\n\n";
+            $body   .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
+            $body   .= "Best regards,\n";
+            $body   .= $fromName . "\n";
+
+            // Use the same MailService::send signature as for normal user mails
+            $this->userMailService->send(
+                $user,
+                $subject,
+                $body
+            );
+        }
+
+        // 3) Mark all interests for that date as notified
+        $now           = (new \DateTime())->format('Y-m-d H:i:s');
+        $updateSql     = 'UPDATE bs_booking_interest SET notified_at = ? WHERE interest_date = ?';
+        $updateStmt    = $this->dbAdapter->createStatement($updateSql, array($now, $dateStr));
+        $updateStmt->execute();
     }
 
     protected function t($message, $textDomain = 'default', $locale = null)

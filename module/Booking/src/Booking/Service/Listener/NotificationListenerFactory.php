@@ -8,12 +8,11 @@ use Base\View\Helper\DateRange;
 use Base\View\Helper\PriceFormatPlain;
 use Booking\Manager\Booking\BillManager;
 use Booking\Manager\ReservationManager;
-use Service\Service\BookingInterestService;
 use Square\Manager\SquareManager;
 use User\Manager\UserManager;
 use User\Service\MailService as UserMailService;
 use Zend\I18n\View\Helper\DateFormat;
-use Zend\Mvc\I18n\TranslatorInterface;
+use Zend\Mvc\I18n\Translator;
 use Zend\ServiceManager\FactoryInterface;
 use Zend\ServiceManager\ServiceLocatorInterface;
 
@@ -27,8 +26,6 @@ class NotificationListenerFactory implements FactoryInterface
      */
     public function createService(ServiceLocatorInterface $serviceLocator = null)
     {
-        // In some contexts (older ZF / plugin managers), this factory may be called in a weird way.
-        // Make sure we always end up with a real root service manager if possible.
         if ($serviceLocator && method_exists($serviceLocator, 'getServiceLocator')) {
             $root = $serviceLocator->getServiceLocator();
             if ($root) {
@@ -36,7 +33,6 @@ class NotificationListenerFactory implements FactoryInterface
             }
         }
 
-        // Absolute last-resort defence: if somehow still null, we log it and continue WITHOUT optional services.
         if ($serviceLocator === null) {
             error_log('NotificationListenerFactory: serviceLocator is NULL, proceeding with minimal wiring.');
         }
@@ -91,7 +87,7 @@ class NotificationListenerFactory implements FactoryInterface
             ? $viewHelperManager->get('priceFormatPlain')
             : null;
 
-        /** @var TranslatorInterface $translator */
+        /** @var Translator $translator */
         $translator = $serviceLocator
             ? $serviceLocator->get('MvcTranslator')
             : null;
@@ -101,23 +97,11 @@ class NotificationListenerFactory implements FactoryInterface
             ? $serviceLocator->get(BillManager::class)
             : null;
 
-        /** @var BookingInterestService|null $bookingInterestService */
-        $bookingInterestService = null;
-        if ($serviceLocator) {
-            try {
-                $bookingInterestService = $serviceLocator->get(BookingInterestService::class);
-            } catch (\Exception $e) {
-                // Optional service; log and continue without it
-                error_log('BookingInterestService unavailable: ' . $e->getMessage());
-            }
-        } else {
-            // If we ever see this, we know why interest notifications are not wired
-            error_log('NotificationListenerFactory: cannot resolve BookingInterestService because serviceLocator is NULL');
-        }
+        // DB adapter (for interest notifications)
+        $dbAdapter = $serviceLocator
+            ? $serviceLocator->get('Zend\Db\Adapter\Adapter')
+            : null;
 
-        // Build listener. If any of the required deps somehow ended up null,
-        // they will cause a clearer error at construction time, but at least
-        // we’re not failing on a null ->get() any more.
         return new NotificationListener(
             $optionManager,
             $reservationManager,
@@ -130,7 +114,7 @@ class NotificationListenerFactory implements FactoryInterface
             $translator,
             $bookingBillManager,
             $priceFormatHelper,
-            $bookingInterestService
+            $dbAdapter
         );
     }
 }
