@@ -44,15 +44,14 @@ class NotificationListenerFactory implements FactoryInterface
         /** @var PriceFormatPlain $priceFormatHelper */
         $priceFormatHelper  = $sm->get('ViewHelperManager')->get('PriceFormatPlain');
 
-        // Booking interest service (TRULY optional)
-        /** @var BookingInterestService|null $bookingInterestService */
-        /** @var BookingInterestService|null $bookingInterestService */
+    
+            /** @var BookingInterestService|null $bookingInterestService */
+        $bookingInterestService = null;
             try {
-                // use the imported FQCN – this matches Service/module.config.php
-                $bookingInterestService = $sm->get(BookingInterestService::class);
-            } catch (\E$bookingInterestService = null;
-            xception $e) {
-                error_log("BookingInterestService unavailable: " . $e->getMessage());
+                $bookingInterestService = $serviceLocator->get(BookingInterestService::class);
+            } catch (\Exception $e) {
+                // Optional service; log and continue without it
+                error_log('BookingInterestService unavailable: ' . $e->getMessage());
             }
 
         return new NotificationListener(
