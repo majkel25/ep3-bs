@@ -352,14 +352,14 @@ class BookingInterestService
     }
 
     protected function sendTwilioSms($to, $body)
-{
-    $sid        = getenv('TWILIO_ACCOUNT_SID');
-    $token      = getenv('TWILIO_AUTH_TOKEN');
-    $msgService = getenv('TWILIO_MESSAGING_SERVICE_SID');
+    {
+        $sid        = getenv('TWILIO_ACCOUNT_SID');
+        $token      = getenv('TWILIO_AUTH_TOKEN');
+        $msgService = getenv('TWILIO_MESSAGING_SERVICE_SID');
 
-    if (! $sid || ! $token || ! $msgService) {
-        // Twilio not configured; silently skip
-        return;
+        if (! $sid || ! $token || ! $msgService) {
+            // Twilio not configured; silently skip
+            return;
     }
 
     $url = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
