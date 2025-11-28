@@ -180,7 +180,7 @@ class NotificationListener extends AbstractListenerAggregate
             . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
             . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
-        $this->userMailService->sendMessage(
+        $this->userMailService->send(
             $user,
             $subject,
             $message,
@@ -279,7 +279,7 @@ class NotificationListener extends AbstractListenerAggregate
             . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
             . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
-        $this->userMailService->sendMessage(
+        $this->userMailService->send(
             $user,
             $subject,
             $message
