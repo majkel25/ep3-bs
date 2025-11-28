@@ -134,7 +134,7 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
-        // Calendar is kept but not attached, as MailService::send expects attachments array
+        // Calendar object kept but not attached (MailService::send expects attachments array)
         $vCalendar = new \Eluceo\iCal\Component\Calendar($this->optionManager->get('client.website'));
         $vEvent    = new \Eluceo\iCal\Component\Event();
         $vEvent
@@ -179,7 +179,7 @@ class NotificationListener extends AbstractListenerAggregate
             . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
             . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
-        // Use the existing signature: user, subject, message (no attachments)
+        // Use existing MailService::send signature (recipient, subject, text)
         $this->userMailService->send(
             $user,
             $subject,
@@ -240,7 +240,7 @@ class NotificationListener extends AbstractListenerAggregate
         $reservationEnd = new \DateTime($reservation->need('date'));
         $reservationEnd->setTime($reservationTimeEnd[0], $reservationTimeEnd[1]);
 
-        // === NEW: notify all users who registered interest for this date ===
+        // === Notify users who registered interest for this date ===
         try {
             $this->notifyInterestedUsers(
                 $reservationStart,
@@ -299,9 +299,7 @@ class NotificationListener extends AbstractListenerAggregate
             $dateRangerHelper($reservationStart, $reservationEnd)
         );
 
-        // The old BillManager::getByBooking() block is intentionally removed
-        // to avoid calling a method that does not exist in your BillManager.
-
+        // Bill breakdown removed – your BillManager doesn’t expose getByBooking()
         $this->backendMailService->send(
             $backendSubject,
             $backendMessage
@@ -320,15 +318,24 @@ class NotificationListener extends AbstractListenerAggregate
 
         $dateStr = $start->format('Y-m-d');
 
-        // 1) Get all interests for this date which haven't been notified yet
-        $sql      = 'SELECT user_id FROM bs_booking_interest WHERE interest_date = ? AND (notified_at IS NULL OR notified_at = "0000-00-00 00:00:00")';
-        $stmt     = $this->dbAdapter->createStatement($sql, array($dateStr));
-        $result   = $stmt->execute();
-        $userIds  = array();
+        // 1) Get all interests for this date (no assumptions about notified_at)
+        $sql    = 'SELECT * FROM bs_booking_interest WHERE interest_date = ?';
+        $stmt   = $this->dbAdapter->createStatement($sql, array($dateStr));
+        $result = $stmt->execute();
+
+        $userIds = array();
 
         foreach ($result as $row) {
+            $uid = null;
+
             if (isset($row['user_id'])) {
-                $userIds[] = (int) $row['user_id'];
+                $uid = (int) $row['user_id'];
+            } elseif (isset($row['uid'])) {
+                $uid = (int) $row['uid'];
+            }
+
+            if ($uid) {
+                $userIds[] = $uid;
             }
         }
 
@@ -365,7 +372,6 @@ class NotificationListener extends AbstractListenerAggregate
             $body   .= "Best regards,\n";
             $body   .= $fromName . "\n";
 
-            // Use the same MailService::send signature as for normal user mails
             $this->userMailService->send(
                 $user,
                 $subject,
@@ -373,11 +379,15 @@ class NotificationListener extends AbstractListenerAggregate
             );
         }
 
-        // 3) Mark all interests for that date as notified
-        $now           = (new \DateTime())->format('Y-m-d H:i:s');
-        $updateSql     = 'UPDATE bs_booking_interest SET notified_at = ? WHERE interest_date = ?';
-        $updateStmt    = $this->dbAdapter->createStatement($updateSql, array($now, $dateStr));
-        $updateStmt->execute();
+        // 3) Try to mark interests as notified if the column exists – ignore errors
+        try {
+            $now        = (new \DateTime())->format('Y-m-d H:i:s');
+            $updateSql  = 'UPDATE bs_booking_interest SET notified_at = ? WHERE interest_date = ?';
+            $updateStmt = $this->dbAdapter->createStatement($updateSql, array($now, $dateStr));
+            $updateStmt->execute();
+        } catch (\Throwable $e) {
+            // If notified_at doesn't exist or update fails, we just ignore it.
+        }
     }
 
     protected function t($message, $textDomain = 'default', $locale = null)
