@@ -162,7 +162,7 @@ class NotificationListener extends AbstractListenerAggregate
 
         // Friendly subject:
         $subject = sprintf(
-            'Your booking for %s %s',
+            'Your booking for Table %s %s',
             $square->need('name'),
             $reservationStart->format('j M Y')
         );
@@ -176,7 +176,7 @@ class NotificationListener extends AbstractListenerAggregate
         $endStr   = $reservationEnd->format('H:i');
 
         $message  = "Dear {$userName},\n\n";
-        $message .= "We have reserved {$tableName}, {$dateStr}, {$startStr} to {$endStr} for you. ";
+        $message .= "We have reserved Table {$tableName}, from {$dateStr}, {$startStr} to {$endStr} for you. ";
         $message .= "Thank you for your booking.\n\n";
         $message .= "Enjoy your snooker.\n";
 
@@ -193,8 +193,8 @@ class NotificationListener extends AbstractListenerAggregate
 
         $message .= "\n\n" . $this->t('With kind regards') . ",\n"
             . $this->optionManager->get('client.name.full') . "\n\n"
-            . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
-            . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
+        //    . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
+        //    . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
         // Use existing MailService::send signature (recipient, subject, text)
         $this->userMailService->send(
@@ -407,6 +407,25 @@ class NotificationListener extends AbstractListenerAggregate
             $subject,
             $body
         );
+    }
+
+    // ---------------------------------------------------------
+    // SMS / TEXT NOTIFICATION VIA TWILIO
+    //
+    // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
+    // ---------------------------------------------------------
+    $notifySms = (int) $user->get('notify_cancel_whatsapp');
+    $phone     = $user->get('phone');
+
+    if ($notifySms === 1 && $phone) {
+
+            // Short SMS-friendly text
+            $smsBody  = "Booking alert: a table ({$squareName}) became free.\n";
+            $smsBody .= "Time: {$dateLine}, {$timeRange}.\n";
+            $smsBody .= "Log in to SSA bookings to reserve it.";
+
+            $this->sendTwilioSms($phone, $smsBody);
+        }
     }
 
     // 3) Try to mark interests as notified if the column exists – ignore errors

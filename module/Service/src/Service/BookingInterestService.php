@@ -350,4 +350,44 @@ class BookingInterestService
 
         return $this->tg->delete("interest_date < '{$cutoff}' OR notified_at IS NOT NULL");
     }
+
+    protected function sendTwilioSms($to, $body)
+{
+    $sid        = getenv('TWILIO_ACCOUNT_SID');
+    $token      = getenv('TWILIO_AUTH_TOKEN');
+    $msgService = getenv('TWILIO_MESSAGING_SERVICE_SID');
+
+    if (! $sid || ! $token || ! $msgService) {
+        // Twilio not configured; silently skip
+        return;
+    }
+
+    $url = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
+
+    $data = array(
+        'To'                => $to,
+        'MessagingServiceSid' => $msgService,
+        'Body'              => $body,
+    );
+
+    $postFields = http_build_query($data, '', '&');
+
+    // Use cURL directly to avoid extra dependencies
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
+    curl_setopt($ch, CURLOPT_USERPWD, $sid . ':' . $token);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+
+    try {
+        curl_exec($ch);
+    } catch (\Throwable $e) {
+        // You can add error_log here if you want to debug delivery issues
+    } finally {
+        if (is_resource($ch)) {
+            curl_close($ch);
+        }
+    }
+}
 }
