@@ -1,4 +1,3 @@
-
 <?php
 
 namespace Booking\Service\Listener;
@@ -45,9 +44,16 @@ class NotificationListenerFactory implements FactoryInterface
         /** @var PriceFormatPlain $priceFormatHelper */
         $priceFormatHelper  = $sm->get('ViewHelperManager')->get('PriceFormatPlain');
 
-        // Booking interest service (now required for cancellation watchers)
+        // Booking interest service (TRULY optional)
         /** @var BookingInterestService|null $bookingInterestService */
-        $bookingInterestService = $sm->get(BookingInterestService::class);
+        /** @var BookingInterestService|null $bookingInterestService */
+            try {
+                // use the imported FQCN – this matches Service/module.config.php
+                $bookingInterestService = $sm->get(BookingInterestService::class);
+            } catch (\E$bookingInterestService = null;
+            xception $e) {
+                error_log("BookingInterestService unavailable: " . $e->getMessage());
+            }
 
         return new NotificationListener(
             $optionManager,
