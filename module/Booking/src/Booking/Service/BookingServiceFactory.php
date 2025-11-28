@@ -34,11 +34,12 @@ class BookingServiceFactory implements FactoryInterface
             // Attach the listener to the booking events
             $notificationListener->attach($eventManager);
 
-        } catch (\Throwable $e) {
+       } catch (\Throwable $e) {
             // TEMPORARY: dump the real error to the browser and stop.
             header('Content-Type: text/plain; charset=utf-8');
             echo "DEBUG: exception while attaching NotificationListener\n\n";
             echo get_class($e) . ": " . $e->getMessage() . "\n\n";
+            echo "In file: " . $e->getFile() . " on line " . $e->getLine() . "\n\n";
             echo $e->getTraceAsString();
             exit;
         }
