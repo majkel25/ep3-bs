@@ -148,20 +148,25 @@ class NotificationListener extends AbstractListenerAggregate
             );
         $vCalendar->addComponent($vEvent);
 
+        // Friendly subject:
         $subject = sprintf(
-            $this->t('Your %s-booking for %s'),
-            $this->optionManager->get('subject.square.type'),
-            $dateFormatHelper($reservationStart, \IntlDateFormatter::MEDIUM, \IntlDateFormatter::SHORT)
+            'Your booking for %s %s',
+            $square->need('name'),
+            $reservationStart->format('j M Y')
         );
 
-        $message = sprintf(
-            $this->t('We have reserved %s %s, %s for you. The reserved period is %s.'),
-            $this->optionManager->get('subject.square.type'),
-            $square->need('name'),
-            $dateFormatHelper($reservationStart, \IntlDateFormatter::MEDIUM, \IntlDateFormatter::NONE),
-            $dateRangerHelper($reservationStart, $reservationEnd),
-            $this->optionManager->need('subject.square.type')
-        );
+        // Build clean body:
+        $userName  = $user->need('alias');
+        $tableName = $square->need('name');
+
+        $dateStr  = $reservationStart->format('j M Y');
+        $startStr = $reservationStart->format('H:i');
+        $endStr   = $reservationEnd->format('H:i');
+
+        $message  = "Dear {$userName},\n\n";
+        $message .= "We have reserved {$tableName}, {$dateStr}, {$startStr} to {$endStr} for you. ";
+        $message .= "Thank you for your booking.\n\n";
+        $message .= "Enjoy your snooker.\n";
 
         if ($booking->get('price') > 0) {
             $message .= ' ' . sprintf(
