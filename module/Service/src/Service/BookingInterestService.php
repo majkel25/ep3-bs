@@ -43,18 +43,28 @@ class BookingInterestService
         }
     }
 
-    /**
-     * Notify all interested users when a booking is cancelled.
-     *
-     * @param array $booking expects:
-     *   - id
-     *   - start (DateTime or string)
-     *   - end   (DateTime or string|null)
-     *   - square_name (optional nice label)
-     */
+    public function hasInterest($userId, \DateTimeInterface $date)
+    {
+        $userId = (int) $userId;
+        $d      = $date->format('Y-m-d');
+
+        $select = new Select('bs_booking_interest');
+        $select->where([
+            'user_id'       => $userId,
+            'interest_date' => $d,
+        ]);
+
+        $rows = $this->tg->selectWith($select);
+
+        foreach ($rows as $row) {
+            return true;
+        }
+
+        return false;
+    }
+
     public function notifyCancellation(array $booking)
     {
-        // ---- DEBUG: log incoming booking data ----
         $startLog = isset($booking['start'])
             ? (is_object($booking['start'])
                 ? $booking['start']->format('Y-m-d H:i:s')
@@ -63,7 +73,6 @@ class BookingInterestService
 
         error_log('SSA BookingInterestService::notifyCancellation START, start=' . $startLog);
 
-        // Normalise start -> DateTime
         $start = isset($booking['start']) ? $booking['start'] : null;
         if (! $start) {
             error_log('SSA BookingInterestService::notifyCancellation: no start date, abort');
@@ -77,14 +86,12 @@ class BookingInterestService
         $dateStr = $start->format('Y-m-d');
         error_log('SSA BookingInterestService::notifyCancellation: interest_date=' . $dateStr);
 
-        // ---- Load interest rows for that date ----
         $select = new Select('bs_booking_interest');
         $select->where(['interest_date' => $dateStr]);
 
         $rows    = $this->tg->selectWith($select);
         $rowList = [];
         foreach ($rows as $row) {
-            // buffer rows so we can iterate multiple times
             $rowList[] = $row;
         }
 
@@ -92,11 +99,9 @@ class BookingInterestService
         error_log('SSA BookingInterestService::notifyCancellation: interest rows found=' . $rowCount);
 
         if ($rowCount === 0) {
-            // Nothing to notify
             return;
         }
 
-        // ---- Build list of user IDs from rows (support user_id OR uid) ----
         $userIds = [];
         foreach ($rowList as $row) {
             $uIdFromRow = null;
@@ -120,7 +125,6 @@ class BookingInterestService
             return;
         }
 
-        // ---- Fetch contact data for these users ----
         $users = $this->fetchUserContacts($userIds);
 
         if (empty($users)) {
@@ -140,9 +144,8 @@ class BookingInterestService
 
             $contact = $users[$uid];
 
-            // Email
+            // Email: treat registered interest as consent; send if email exists
             if (! empty($contact['email'])) {
-            //if (! empty($contact['notify_cancel_email']) && ! empty($contact['email'])) {
                 $email = $contact['email'];
 
                 error_log(sprintf(
@@ -172,35 +175,35 @@ class BookingInterestService
                 ));
             }
 
-            // WhatsApp (optional)
             if ($this->whatsApp
                 && ! empty($contact['notify_cancel_whatsapp'])
                 && ! empty($contact['phone'])
             ) {
+                $phone = $contact['phone'];
+
                 error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d %s',
+                    'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d (%s)',
                     $uid,
-                    $contact['phone']
+                    $phone
                 ));
 
                 try {
-                    $this->whatsApp->sendToNumber($contact['phone'], $waUserText);
+                    $this->sendWhatsApp($phone, $waUserText);
                 } catch (\Throwable $e) {
                     error_log(sprintf(
-                        'SSA BookingInterestService::notifyCancellation: WhatsApp send FAILED for uid=%d: %s',
-                        $uid,
+                        'SSA BookingInterestService::notifyCancellation: sendWhatsApp FAILED for %s: %s',
+                        $phone,
                         $e->getMessage()
                     ));
                 }
             }
         }
 
-        // ---- Mark notifications as sent for this date ----
         $now = (new \DateTime())->format('Y-m-d H:i:s');
 
         foreach ($rowList as $row) {
-            // support id or iid as primary key
             $pk = null;
+
             if (isset($row['id'])) {
                 $pk = (int) $row['id'];
             } elseif (isset($row['iid'])) {
@@ -208,20 +211,109 @@ class BookingInterestService
             }
 
             if ($pk !== null) {
-                $this->tg->update(
-                    ['notified_at' => $now],
-                    ['id' => $pk]
-                );
+                try {
+                    $this->tg->update(
+                        ['notified_at' => $now],
+                        ['id' => $pk]
+                    );
+
+                    error_log('SSA BookingInterestService::notifyCancellation: marked notified_at for interest id=' . $pk);
+                } catch (\Throwable $e) {
+                    error_log(sprintf(
+                        'SSA BookingInterestService::notifyCancellation: FAILED to update notified_at for interest id=%d: %s',
+                        $pk,
+                        $e->getMessage()
+                    ));
+                }
             }
         }
+
+        error_log('SSA BookingInterestService::notifyCancellation END');
     }
 
-    /**
-     * Load contact data for a set of user IDs.
-     *
-     * @param int[] $userIds
-     * @return array uid => [email, phone, notify_cancel_email, notify_cancel_whatsapp]
-     */
+    protected function buildEmailBody(array $booking)
+    {
+        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
+
+        $start = isset($booking['start']) ? $booking['start'] : null;
+        $end   = isset($booking['end']) ? $booking['end'] : null;
+
+        $slot = $this->formatSlot($start, $end);
+
+        $body  = "Good news!\n\n";
+        $body .= "A booking has just been cancelled for {$square}.\n";
+        $body .= "Date and time: {$slot}\n\n";
+        $body .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
+        $body .= "Best regards,\n";
+        $body .= "Surrey Snooker Academy\n";
+
+        return $body;
+    }
+
+    protected function buildWhatsAppUserText(array $booking)
+    {
+        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
+
+        $start = isset($booking['start']) ? $booking['start'] : null;
+        $end   = isset($booking['end']) ? $booking['end'] : null;
+
+        $slot = $this->formatSlot($start, $end);
+
+        $text  = "Free slot available at Surrey Snooker Academy!\n";
+        $text .= "{$square}, {$slot}\n";
+        $text .= "Book now via the SSA booking system.";
+
+        return $text;
+    }
+
+    protected function formatSlot($start, $end = null)
+    {
+        if (! $start) {
+            return 'the selected date/time';
+        }
+
+        if ($start instanceof \DateTimeInterface) {
+            $s = $start;
+        } else {
+            $s = new \DateTime($start);
+        }
+
+        if ($end) {
+            if ($end instanceof \DateTimeInterface) {
+                $e = $end;
+            } else {
+                $e = new \DateTime($end);
+            }
+            return $s->format('Y-m-d H:i') . ' – ' . $e->format('H:i');
+        }
+
+        return $s->format('Y-m-d');
+    }
+
+    protected function sendEmail($to, $body)
+    {
+        $fromEmail = isset($this->mailCfg['from_email']) ? $this->mailCfg['from_email'] : 'no-reply@example.com';
+        $fromName  = isset($this->mailCfg['from_name']) ? $this->mailCfg['from_name'] : 'Booking System';
+        $subject   = isset($this->mailCfg['subject']) ? $this->mailCfg['subject'] : 'A free slot is now available';
+
+        $message = new Message();
+        $message->setFrom($fromEmail, $fromName);
+        $message->addTo($to);
+        $message->setSubject($subject);
+        $message->setBody($body);
+
+        $this->mail->send($message);
+    }
+
+    protected function sendWhatsApp($phone, $text)
+    {
+        if (! $this->whatsApp) {
+            return;
+        }
+
+        $this->whatsApp->sendMessage($phone, $text);
+    }
+
     protected function fetchUserContacts(array $userIds)
     {
         if (empty($userIds)) {
@@ -252,105 +344,6 @@ class BookingInterestService
         return $map;
     }
 
-    /**
-     * Build the email body for the “free slot” notification.
-     *
-     * @param array $booking
-     * @return string
-     */
-    protected function buildEmailBody(array $booking)
-    {
-        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
-        $when   = $this->formatSlot($booking);
-
-        // IMPORTANT: handle DateTime OR string safely
-        if (isset($booking['start'])) {
-            if ($booking['start'] instanceof \DateTimeInterface) {
-                $startDate = $booking['start'];
-            } else {
-                $startDate = new \DateTime($booking['start']);
-            }
-        } else {
-            $startDate = null;
-        }
-
-        $dateLine = $startDate ? $startDate->format('Y-m-d') : 'selected day';
-
-        $body  = "Hello,\n\n";
-        $body .= "A booking on {$square} for {$when} was cancelled.\n";
-        $body .= "A slot may now be available on the day you are watching.\n\n";
-        $body .= "Watched date: {$dateLine}\n";
-        $body .= "Court: {$square}\n";
-        if (isset($booking['id'])) {
-            $body .= "Reference: " . $booking['id'] . "\n";
-        }
-        $body .= "\nPlease open the booking system to try and reserve the freed slot.\n\n";
-        $body .= "This is a one-time notification for this day.\n";
-
-        return $body;
-    }
-
-    protected function sendEmail($to, $body)
-    {
-        $message = new Message();
-        $message->setSubject('Booking cancelled – a slot may be free');
-        $message->addTo($to);
-
-        $fromAddress = isset($this->mailCfg['address'])
-            ? $this->mailCfg['address']
-            : 'no-reply@example.com';
-
-        $message->setFrom($fromAddress, 'Bookings');
-        $message->setBody($body);
-
-        $this->mail->send($message);
-    }
-
-    protected function buildWhatsAppUserText(array $booking)
-    {
-        $square = isset($booking['square_name']) ? $booking['square_name'] : 'Selected court';
-        $when   = $this->formatSlot($booking);
-
-        $text  = "Booking alert \xF0\x9F\x94\x94\n"; // 🔔
-        $text .= "A booking on {$square} for {$when} was cancelled.\n\n";
-        $text .= "There may be a free slot now – open the booking system and try to reserve it.";
-
-        return $text;
-    }
-
-    protected function formatSlot(array $booking)
-    {
-        $start = isset($booking['start']) ? $booking['start'] : null;
-        $end   = isset($booking['end']) ? $booking['end'] : null;
-
-        if (! $start) {
-            return 'selected time';
-        }
-
-        if ($start instanceof \DateTimeInterface) {
-            $s = $start;
-        } else {
-            $s = new \DateTime($start);
-        }
-
-        if ($end) {
-            if ($end instanceof \DateTimeInterface) {
-                $e = $end;
-            } else {
-                $e = new \DateTime($end);
-            }
-            return $s->format('Y-m-d H:i') . ' – ' . $e->format('H:i');
-        }
-
-        return $s->format('Y-m-d');
-    }
-
-    /**
-     * Optional housekeeping: remove old/used interests.
-     *
-     * @param int $days Age in days
-     * @return int rows deleted
-     */
     public function cleanupOldInterests($days = 30)
     {
         $cutoff = (new \DateTime("-{$days} days"))->format('Y-m-d');
