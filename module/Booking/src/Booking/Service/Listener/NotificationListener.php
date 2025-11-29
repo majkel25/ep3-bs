@@ -428,7 +428,7 @@ class NotificationListener extends AbstractListenerAggregate
             $smsBody .= "Date: " . $start->format('d.m.Y') . "\n";
             $smsBody .= "Time: " . $start->format('H:i') . ' - ' . $end->format('H:i'). "\n";
             $smsBody .= "is free now.\n\n";
-            $smsBody .= "You received this text because of your preferences set in \n 'My Account/Update Notification'  \n on SSA website.\n";
+            $smsBody .= "To STOP change preferences in \n 'My Account/Update Notification'.\n";
 
             // Debug email so you can see this branch is being hit
                 $debugBody  = "DEBUG: SMS branch hit.\n";
