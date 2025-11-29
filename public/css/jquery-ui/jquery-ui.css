@@ -78,10 +78,10 @@
 	cursor: default;
 }
 .ui-datepicker {
-	margin-top: 8px;
-	padding: 28px !important;
+	margin-top: 60px !important;
+	padding: 8px !important;
 	display: none;
-	z-index: 4096 !important;
+	z-index: 2096 !important;
 }
 .ui-datepicker .ui-datepicker-header {
 	position: relative;
