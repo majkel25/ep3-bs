@@ -422,13 +422,13 @@ class NotificationListener extends AbstractListenerAggregate
         if ($notifySms === 1) {
 
             // Very simple test message
-            $smsBody  = "SSA Message: Cancellation Notification.\n";
+            $smsBody  = "SSA Message: \n Cancellation Notification.\n";
             $smsBody .= "There was a Cancellation on the day you registered interest\n";
             $smsBody .= "Table: {$squareName}\n";
             $smsBody .= "Date: " . $start->format('d.m.Y') . "\n";
             $smsBody .= "Time: " . $start->format('H:i') . ' - ' . $end->format('H:i'). "\n";
             $smsBody .= "is free now.\n\n";
-            $smsBody .= "You received this text because of your preferences set in 'My Account/Update Notification' on SSA website.\n";
+            $smsBody .= "You received this text because of your preferences set in \n 'My Account/Update Notification'  \n on SSA website.\n";
 
             // Debug email so you can see this branch is being hit
                 $debugBody  = "DEBUG: SMS branch hit.\n";
