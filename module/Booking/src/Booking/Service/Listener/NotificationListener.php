@@ -415,12 +415,15 @@ class NotificationListener extends AbstractListenerAggregate
         // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
         // ---------------------------------------------------------
         $notifySms = (int) $user->get('notify_cancel_whatsapp');
+        $phone  = $user->getMeta('phone');
+        
 
         // For now we ignore the user's stored phone and always send to a fixed test number
         if ($notifySms === 1) {
 
             // Very simple test message
-            $smsBody  = "SSA test SMS: cancellation notification.\n";
+            $smsBody  = "SSA Message: Cancellation Notification.\n";
+            $smsBody .= "There was a Cancelation on the day you registered interest\n";
             $smsBody .= "Table: {$squareName}\n";
             $smsBody .= "Date: " . $start->format('d.m.Y') . "\n";
             $smsBody .= "Time: " . $start->format('H:i') . ' - ' . $end->format('H:i');
@@ -433,7 +436,8 @@ class NotificationListener extends AbstractListenerAggregate
             );
 
             // Hard-coded test number
-            $this->sendTwilioSms('+447743960776', $smsBody);
+            // TEST $this->sendTwilioSms('+447743960776', $smsBody);
+            $this->sendTwilioSms($phone, $smsBody);
         }
 
 
