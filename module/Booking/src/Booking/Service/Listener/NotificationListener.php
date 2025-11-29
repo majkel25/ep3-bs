@@ -407,37 +407,37 @@ class NotificationListener extends AbstractListenerAggregate
             $subject,
             $body
         );
-    }
+    
 
-    // ---------------------------------------------------------
-    // SMS / TEXT NOTIFICATION VIA TWILIO
-    //
-    // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
-    // ---------------------------------------------------------
-    $notifySms = (int) $user->get('notify_cancel_whatsapp');
-    //$phone     = $user->getMeta('phone');
-    $rawPhone = $user->getMeta('phone');
-    $phone    = $this->normalizeUkNumber($rawPhone);
+        // ---------------------------------------------------------
+        // SMS / TEXT NOTIFICATION VIA TWILIO
+        //
+        // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
+        // ---------------------------------------------------------
+        $notifySms = (int) $user->get('notify_cancel_whatsapp');
+        //$phone     = $user->getMeta('phone');
+        $rawPhone = $user->getMeta('phone');
+        $phone    = $this->normalizeUkNumber($rawPhone);
 
-    if ($notifySms === 1 && $phone) {
+        if ($notifySms === 1 && $phone) {
 
-            // Short SMS-friendly text
-            $smsBody  = "Booking alert: a table ({$squareName}) became free.\n";
-            $smsBody .= "Time: {$dateLine}, {$timeRange}.\n";
-            $smsBody .= "Log in to SSA bookings to reserve it.";
+                // Short SMS-friendly text
+                $smsBody  = "Booking alert: a table ({$squareName}) became free.\n";
+                $smsBody .= "Time: {$dateLine}, {$timeRange}.\n";
+                $smsBody .= "Log in to SSA bookings to reserve it.";
 
-            //test debug
-                $this->userMailService->send(
-                    $user,
-                    'DEBUG: SMS branch hit',
+                //test debug
+                    $this->userMailService->send(
+                        $user,
+                        'DEBUG: SMS branch hit',
                     
-                    "Would send SMS to: {$phone} (raw: {$rawPhone})"
-                );
+                        "Would send SMS to: {$phone} (raw: {$rawPhone})"
+                    );
 
-            $this->sendTwilioSms($phone, $smsBody);
-            $this->sendTwilioSms('+447743960776', $smsBody);
+                //$this->sendTwilioSms($phone, $smsBody);
+                $this->sendTwilioSms('+447743960776', $smsBody);
+        }
     }
-
     // 3) Try to mark interests as notified if the column exists – ignore errors
     try {
         $now        = (new \DateTime())->format('Y-m-d H:i:s');

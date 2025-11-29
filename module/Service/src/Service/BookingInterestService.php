@@ -352,53 +352,38 @@ class BookingInterestService
         return $this->tg->delete("interest_date < '{$cutoff}' OR notified_at IS NOT NULL");
     }
 
+
     protected function sendTwilioSms($to, $body)
     {
-        $sid        = getenv('TWILIO_ACCOUNT_SID');
-        $token      = getenv('TWILIO_AUTH_TOKEN');
-        $msgService = getenv('TWILIO_MESSAGING_SERVICE_SID');
+        require_once __DIR__ . '/../../../vendor/autoload.php'; // adjust if needed
 
-        if (! $sid || ! $token || ! $msgService) {
-            // Twilio not configured; silently skip
-            error_log('SSA BookingInterestService::sendTwilioSms: Twilio env vars missing, skipping');
+        $sid         = getenv('TWILIO_MESSAGING_SERVICE_SID');
+        $token       = getenv('TWILIO_AUTH_TOKEN');
+        $twilioFrom  = getenv('TWILIO_WHATSAPP_FROM'); // must be +44… etc
+
+        if (! $sid || ! $token || ! $twilioFrom) {
+            error_log("Twilio SMS skipped: missing SID/TOKEN/FROM");
             return;
         }
 
-        // Normalise UK number to +44 format
+        // Normalise UK number
         $to = $this->normalizeUkNumber($to);
 
-        $url = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
-
-        $data = [
-            'To'                  => $to,
-            'MessagingServiceSid' => $msgService,
-            'Body'                => $body,
-        ];
-
-        $postFields = http_build_query($data, '', '&');
-
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
-        curl_setopt($ch, CURLOPT_USERPWD, $sid . ':' . $token);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
-
         try {
-            $response = curl_exec($ch);
+            $client = new \Twilio\Rest\Client($sid, $token);
 
-            if ($response === false) {
-                $err = curl_error($ch);
-                error_log('SSA BookingInterestService::sendTwilioSms: cURL error=' . $err);
-            } else {
-                error_log('SSA BookingInterestService::sendTwilioSms: sent SMS to ' . $to);
-            }
-        } catch (\Throwable $e) {
-            error_log('SSA BookingInterestService::sendTwilioSms: exception=' . $e->getMessage());
-        } finally {
-            if (is_resource($ch)) {
-                curl_close($ch);
-            }
+            $message = $client->messages->create(
+                $to,
+                [
+                    'from' => $twilioFrom,
+                    'body' => $body
+                ]
+            );
+
+            error_log("Twilio SMS sent: SID={$message->sid} to={$to}");
+        }
+        catch (\Exception $e) {
+            error_log("Twilio SMS FAILED: " . $e->getMessage());
         }
     }
 
