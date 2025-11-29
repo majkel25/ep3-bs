@@ -426,8 +426,9 @@ class NotificationListener extends AbstractListenerAggregate
             $smsBody .= "There was a Cancellation on the day you registered interest\n";
             $smsBody .= "Table: {$squareName}\n";
             $smsBody .= "Date: " . $start->format('d.m.Y') . "\n";
-            $smsBody .= "Time: " . $start->format('H:i') . ' - ' . $end->format('H:i');
-            $smsBody .= "is free now.\n";
+            $smsBody .= "Time: " . $start->format('H:i') . ' - ' . $end->format('H:i'). "\n";
+            $smsBody .= "is free now.\n\n";
+            $smsBody .= "You received this text because of your preferences set in 'My Account/Update Notification' on SSA website.\n";
 
             // Debug email so you can see this branch is being hit
                 $debugBody  = "DEBUG: SMS branch hit.\n";
@@ -439,11 +440,11 @@ class NotificationListener extends AbstractListenerAggregate
                 $debugBody .= "Users registered interest for {$dateStr}:\n";
                 $debugBody .= implode(', ', $userIds) . "\n";
 
-                $this->userMailService->send(
-                    $user,
-                    'DEBUG: SMS branch hit',
-                    $debugBody
-                );
+                //$this->userMailService->send(
+                //    $user,
+                //    'DEBUG: SMS branch hit',
+                //    $debugBody
+                //);
 
             // Hard-coded test number
             // TEST $this->sendTwilioSms('+447743960776', $smsBody);
