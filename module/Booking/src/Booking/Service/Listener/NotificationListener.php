@@ -370,84 +370,99 @@ class NotificationListener extends AbstractListenerAggregate
     //    - their profile flag notify_cancel_email is enabled (== 1)
     $fromName = $this->optionManager->get('client.name.full');
 
+
+    //test addition
     foreach ($userIds as $uid) {
-        try {
-            $user = $this->userManager->get($uid);
-        } catch (\Exception $e) {
-            continue;
+            if (! isset($users[$uid])) {
+                error_log('SSA BookingInterestService::notifyCancellation: no contact record for uid=' . $uid);
+                continue;
+            }
+
+            $contact = $users[$uid];
+
+            // ---------------- EMAIL ----------------
+            if (! empty($contact['email'])) {
+                $email = $contact['email'];
+
+                error_log(sprintf(
+                    'SSA BookingInterestService::notifyCancellation: sending EMAIL to uid=%d <%s>',
+                    $uid,
+                    $email
+                ));
+
+                if (! isset($sentEmails[$email])) {
+                    try {
+                        $this->sendEmail($email, $emailBody);
+                        $sentEmails[$email] = true;
+                    } catch (\Throwable $e) {
+                        error_log(sprintf(
+                            'SSA BookingInterestService::notifyCancellation: sendEmail FAILED for <%s>: %s',
+                            $email,
+                            $e->getMessage()
+                        ));
+                    }
+                }
+            } else {
+                error_log(sprintf(
+                    'SSA BookingInterestService::notifyCancellation: NOT sending email to uid=%d (email empty)',
+                    $uid
+                ));
+            }
+
+            // ---------------- WHATSAPP ----------------
+            if ($this->whatsApp
+                && ! empty($contact['notify_cancel_whatsapp'])
+                && ! empty($contact['phone'])
+            ) {
+                $phone = $contact['phone'];
+
+                error_log(sprintf(
+                    'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d (%s)',
+                    $uid,
+                    $phone
+                ));
+
+                try {
+                    $this->sendWhatsApp($phone, $waUserText);
+                } catch (\Throwable $e) {
+                    error_log(sprintf(
+                        'SSA BookingInterestService::notifyCancellation: sendWhatsApp FAILED for %s: %s',
+                        $phone,
+                        $e->getMessage()
+                    ));
+                }
+            }
+
+            // ---------------- TWILIO SMS ----------------
+            if (! empty($contact['phone'])) {
+                $phone = $contact['phone'];
+
+                error_log(sprintf(
+                    'SSA BookingInterestService::notifyCancellation: sending Twilio SMS to uid=%d (%s)',
+                    $uid,
+                    $phone
+                ));
+
+                try {
+                    $this->sendTwilioSms($phone, $waUserText);
+                } catch (\Throwable $e) {
+                    error_log(sprintf(
+                        'SSA BookingInterestService::notifyCancellation: sendTwilioSms FAILED for %s: %s',
+                        $phone,
+                        $e->getMessage()
+                    ));
+                }
+            } else {
+                error_log(sprintf(
+                    'SSA BookingInterestService::notifyCancellation: NOT sending SMS, no phone for uid=%d',
+                    $uid
+                ));
+            }
         }
+// end of test addition
 
-        if (! $user) {
-            continue;
-        }
 
-        // Respect user preference: notify_cancel_email
-        // If the field does not exist or is 0, we do NOT send.
-        $notifyFlag = (int) $user->get('notify_cancel_email');
-        if ($notifyFlag !== 1) {
-            // user has not opted in for free-slot / cancellation notifications
-            continue;
-        }
-
-        $email = $user->get('email');
-        if (! $email) {
-            continue;
-        }
-
-        $subject = 'A table has become available';
-        $body    = "Good news!\n\n";
-        $body   .= "A booking has just been cancelled for Table {$squareName}.\n";
-        $body   .= "Date and time: " . $start->format('d.m.Y H:i') . ' - ' . $end->format('H:i') . "\n\n";
-        $body   .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
-        $body   .= "Best regards,\n";
-        $body   .= $fromName . "\n";
-
-        $this->userMailService->send(
-            $user,
-            $subject,
-            $body
-        );
-    
-
-        // ---------------------------------------------------------
-        // SMS / TEXT NOTIFICATION VIA TWILIO
-        //
-        // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
-        // ---------------------------------------------------------
-        $notifySms = (int) $user->get('notify_cancel_whatsapp');
-        //$phone     = $user->getMeta('phone');
-        $rawPhone = $user->getMeta('phone');
-        $phone    = $this->normalizeUkNumber($rawPhone);
-
-        if ($notifySms === 1 && $phone) {
-
-                // Short SMS-friendly text
-                $smsBody  = "Booking alert: a table ({$squareName}) became free.\n";
-                $smsBody .= "Time: {$dateLine}, {$timeRange}.\n";
-                $smsBody .= "Log in to SSA bookings to reserve it.";
-
-                //test debug
-                    $this->userMailService->send(
-                        $user,
-                        'DEBUG: SMS branch hit',
-                    
-                        "Would send SMS to: {$phone} (raw: {$rawPhone})"
-                    );
-
-                //$this->sendTwilioSms($phone, $smsBody);
-                $this->sendTwilioSms('+447743960776', $smsBody);
-        }
-    }
-    // 3) Try to mark interests as notified if the column exists – ignore errors
-    try {
-        $now        = (new \DateTime())->format('Y-m-d H:i:s');
-        $updateSql  = 'UPDATE bs_booking_interest SET notified_at = ? WHERE interest_date = ?';
-        $updateStmt = $this->dbAdapter->createStatement($updateSql, array($now, $dateStr));
-        $updateStmt->execute();
-    } catch (\Throwable $e) {
-        // If notified_at doesn't exist or update fails, we just ignore it.
-    }
-}
+ 
 
     protected function t($message, $textDomain = 'default', $locale = null)
     {
