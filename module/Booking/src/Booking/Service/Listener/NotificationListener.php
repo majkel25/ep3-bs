@@ -410,33 +410,33 @@ class NotificationListener extends AbstractListenerAggregate
     
 
         // ---------------------------------------------------------
-        // SMS / TEXT NOTIFICATION VIA TWILIO
+        // SMS / TEXT NOTIFICATION VIA TWILIO (HARD-CODED TEST)
         //
         // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
         // ---------------------------------------------------------
         $notifySms = (int) $user->get('notify_cancel_whatsapp');
-        //$phone     = $user->getMeta('phone');
-        $rawPhone = $user->getMeta('phone');
-        $phone    = $this->normalizeUkNumber($rawPhone);
 
-        if ($notifySms === 1 && $phone) {
+        // For now we ignore the user's stored phone and always send to a fixed test number
+        if ($notifySms === 1) {
 
-                // Short SMS-friendly text
-                $smsBody  = "Booking alert: a table ({$squareName}) became free.\n";
-                $smsBody .= "Time: {$dateLine}, {$timeRange}.\n";
-                $smsBody .= "Log in to SSA bookings to reserve it.";
+            // Very simple test message
+            $smsBody  = "SSA test SMS: cancellation notification.\n";
+            $smsBody .= "Table: {$squareName}\n";
+            $smsBody .= "Date: " . $start->format('d.m.Y') . "\n";
+            $smsBody .= "Time: " . $start->format('H:i') . ' - ' . $end->format('H:i');
 
-                //test debug
-                    $this->userMailService->send(
-                        $user,
-                        'DEBUG: SMS branch hit',
-                    
-                        "Would send SMS to: {$phone} (raw: {$rawPhone})"
-                    );
+            // Debug email so you can see this branch is being hit
+            $this->userMailService->send(
+                $user,
+                'DEBUG: SMS branch hit',
+                "Would send SMS to hardcoded number +447743960776"
+            );
 
-                //$this->sendTwilioSms($phone, $smsBody);
-                $this->sendTwilioSms('+447743960776', $smsBody);
+            // Hard-coded test number
+            $this->sendTwilioSms('+447743960776', $smsBody);
         }
+
+
     }
     // 3) Try to mark interests as notified if the column exists – ignore errors
     try {
@@ -449,8 +449,69 @@ class NotificationListener extends AbstractListenerAggregate
     }
 }
 
+    /**
+     * Send an SMS via Twilio using Messaging Service SID (no SDK, just cURL).
+     * Uses TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_MESSAGING_SERVICE_SID env vars.
+     */
+    protected function sendTwilioSms($to, $body)
+    {
+        $sid        = getenv('TWILIO_ACCOUNT_SID');
+        $token      = getenv('TWILIO_AUTH_TOKEN');
+        $msgService = getenv('TWILIO_MESSAGING_SERVICE_SID');
+
+        if (! $sid || ! $token || ! $msgService) {
+            error_log(sprintf(
+                'SSA NotificationListener::sendTwilioSms: missing env (SID=%s, TOKEN=%s, MSG_SID=%s)',
+                $sid ? 'set' : 'missing',
+                $token ? 'set' : 'missing',
+                $msgService ? 'set' : 'missing'
+            ));
+            return;
+        }
+
+        $url = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
+
+        $data = [
+            'To'                  => $to,
+            'MessagingServiceSid' => $msgService,
+            'Body'                => $body,
+        ];
+
+        $postFields = http_build_query($data, '', '&');
+
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
+        curl_setopt($ch, CURLOPT_USERPWD, $sid . ':' . $token);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+        try {
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+            if ($response === false) {
+                $err = curl_error($ch);
+                error_log('SSA NotificationListener::sendTwilioSms: cURL error=' . $err);
+            } else {
+                error_log(sprintf(
+                    'SSA NotificationListener::sendTwilioSms: HTTP %d, response=%s',
+                    $httpCode,
+                    $response
+                ));
+            }
+        } catch (\Throwable $e) {
+            error_log('SSA NotificationListener::sendTwilioSms: exception=' . $e->getMessage());
+        } finally {
+            if (is_resource($ch)) {
+                curl_close($ch);
+            }
+        }
+    }
+
     protected function t($message, $textDomain = 'default', $locale = null)
     {
         return $this->translator->translate($message, $textDomain, $locale);
     }
+
 }
