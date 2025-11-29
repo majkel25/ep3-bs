@@ -116,6 +116,14 @@ class NotificationListener extends AbstractListenerAggregate
 
     public function onCreateSingle(Event $event)
     {
+        // DEBUG: log every time a booking is created (who, how)
+        error_log(sprintf(
+        'SSA NotificationListener::onCreateSingle fired: bid=%s, uid=%s, route=%s',
+        method_exists($booking, 'get') ? (string) $booking->get('bid') : 'n/a',
+        method_exists($booking, 'get') ? (string) $booking->get('uid') : 'n/a',
+        isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : 'cli'
+        //end of DEBUG
+        
         $booking     = $event->getTarget();
         $reservation = current($booking->getExtra('reservations'));
         $square      = $this->squareManager->get($booking->need('sid'));
@@ -237,6 +245,15 @@ class NotificationListener extends AbstractListenerAggregate
 
     public function onCancelSingle(Event $event)
     {
+        // DEBUG: log every time a booking is cancelled (who, how)
+        error_log(sprintf(
+        'SSA NotificationListener::onCancelSingle fired: bid=%s, uid=%s, route=%s',
+        method_exists($booking, 'get') ? (string) $booking->get('bid') : 'n/a',
+        method_exists($booking, 'get') ? (string) $booking->get('uid') : 'n/a',
+        isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : 'cli'
+        ));
+        //End of DEBUG
+    
         $booking      = $event->getTarget();
         $reservations = $this->reservationManager->getBy(
             ['bid' => $booking->need('bid')],
