@@ -422,7 +422,7 @@ class NotificationListener extends AbstractListenerAggregate
         if ($notifySms === 1) {
 
             // Very simple test message
-            $smsBody  = "SSA Message: \n Cancellation Notification.\n\n";
+            $smsBody  = "SSA Message: \n\n";
             $smsBody .= "There was a Cancellation on the day you registered interest\n\n";
             $smsBody .= "Table: {$squareName}\n";
             $smsBody .= "Date: " . $start->format('d.m.Y') . "\n";
