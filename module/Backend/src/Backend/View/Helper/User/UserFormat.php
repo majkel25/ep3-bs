@@ -31,7 +31,7 @@ class UserFormat extends AbstractHelper
             $view->escapeHtml($user->need('alias')));
 
         $html .= sprintf('<td>%s</td>',
-            $view->t($user->getStatus()));
+            $view->t($user->getStatusLabel()));
 
         /* Email col */
 
