@@ -149,14 +149,14 @@ class NotificationListener extends AbstractListenerAggregate
         $vCalendar->addComponent($vEvent);
 
         // Convert to ICS file content
-        $icsContent = $vCalendar->render();
+        $icsContent = $vCalendar->render(); 
 
         // MailService expects array of attachments:
         $attachments = [
             [
-                'name'    => 'booking.ics',
-                'type'    => 'text/calendar',
-                'content' => $icsContent,
+                'name'     => 'booking.ics',
+                'type'     => 'text/calendar',
+                'content'  => $icsContent,
             ],
         ];
 
@@ -193,14 +193,18 @@ class NotificationListener extends AbstractListenerAggregate
 
         $message .= "\n\n" . $this->t('With kind regards') . ",\n"
             . $this->optionManager->get('client.name.full') . "\n\n";
+        //    . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
+        //    . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
-        // Use existing MailService::send signature (recipient, subject, text, attachments)
+        // Use existing MailService::send signature (recipient, subject, text)
         $this->userMailService->send(
             $user,
             $subject,
             $message,
             $attachments
         );
+
+ 
 
         // Notify backend
         $backendSubject = sprintf(
@@ -315,6 +319,7 @@ class NotificationListener extends AbstractListenerAggregate
             $dateRangerHelper($reservationStart, $reservationEnd)
         );
 
+        // Bill breakdown removed – your BillManager doesn’t expose getByBooking()
         $this->backendMailService->send(
             $backendSubject,
             $backendMessage
@@ -323,81 +328,126 @@ class NotificationListener extends AbstractListenerAggregate
 
     /**
      * Notify users who registered interest for the day of this cancellation.
-     * For now we send a simple email via UserMailService to each interested user.
+     * We treat "registration of interest" as consent, ignoring notify_cancel_email flag.
      */
     protected function notifyInterestedUsers(\DateTime $start, \DateTime $end, $squareName)
-    {
-        if (! $this->dbAdapter) {
-            return;
+{
+    if (! $this->dbAdapter) {
+        return;
+    }
+
+    $dateStr = $start->format('Y-m-d');
+
+    // 1) Get all interests for this date (no assumptions about notified_at)
+    $sql    = 'SELECT * FROM bs_booking_interest WHERE interest_date = ?';
+    $stmt   = $this->dbAdapter->createStatement($sql, array($dateStr));
+    $result = $stmt->execute();
+
+    $userIds = array();
+
+    foreach ($result as $row) {
+        $uid = null;
+
+        if (isset($row['user_id'])) {
+            $uid = (int) $row['user_id'];
+        } elseif (isset($row['uid'])) {
+            $uid = (int) $row['uid'];
         }
 
-        $dateStr = $start->format('Y-m-d');
-
-        // 1) Get all interests for this date
-        $sql    = 'SELECT user_id, uid FROM bs_booking_interest WHERE interest_date = ?';
-        $stmt   = $this->dbAdapter->createStatement($sql, array($dateStr));
-        $result = $stmt->execute();
-
-        $userIds = array();
-
-        foreach ($result as $row) {
-            $uid = null;
-
-            if (isset($row['user_id'])) {
-                $uid = (int) $row['user_id'];
-            } elseif (isset($row['uid'])) {
-                $uid = (int) $row['uid'];
-            }
-
-            if ($uid) {
-                $userIds[$uid] = true;
-            }
-        }
-
-        $userIds = array_keys($userIds);
-
-        if (empty($userIds)) {
-            error_log('SSA NotificationListener::notifyInterestedUsers: no interested users for ' . $dateStr);
-            return;
-        }
-
-        // Format slot text
-        $slotText = $start->format('j M Y, H:i') . ' – ' . $end->format('H:i');
-
-        $subject = 'Booking alert: a table became free.';
-        $bodyTemplate =
-            "Booking alert: a table (%s) became free.\n" .
-            "Time: %s.\n" .
-            "Log in to SSA bookings to reserve it.\n\n" .
-            "SSA Table Bookings\n" .
-            "https://booking.surreysnookeracademy.com/";
-
-        foreach ($userIds as $uid) {
-            try {
-                $user = $this->userManager->get($uid);
-            } catch (\Throwable $e) {
-                error_log(
-                    'SSA NotificationListener::notifyInterestedUsers: failed to load user ' .
-                    $uid . ': ' . $e->getMessage()
-                );
-                continue;
-            }
-
-            $body = sprintf($bodyTemplate, $squareName, $slotText);
-
-            try {
-                $this->userMailService->send($user, $subject, $body);
-                error_log(
-                    'SSA NotificationListener::notifyInterestedUsers: sent interest email to uid=' . $uid
-                );
-            } catch (\Throwable $e) {
-                error_log(
-                    'SSA NotificationListener::notifyInterestedUsers: failed to send email to uid=' .
-                    $uid . ': ' . $e->getMessage()
-                );
-            }
+        if ($uid) {
+            $userIds[] = $uid;
         }
     }
+
+    $userIds = array_values(array_unique($userIds));
+
+    if (empty($userIds)) {
+        return;
+    }
+
+    // 2) For each user, send email ONLY if:
+    //    - they have an email address, and
+    //    - their profile flag notify_cancel_email is enabled (== 1)
+    $fromName = $this->optionManager->get('client.name.full');
+
+    foreach ($userIds as $uid) {
+        try {
+            $user = $this->userManager->get($uid);
+        } catch (\Exception $e) {
+            continue;
+        }
+
+        if (! $user) {
+            continue;
+        }
+
+        // Respect user preference: notify_cancel_email
+        // If the field does not exist or is 0, we do NOT send.
+        $notifyFlag = (int) $user->get('notify_cancel_email');
+        if ($notifyFlag !== 1) {
+            // user has not opted in for free-slot / cancellation notifications
+            continue;
+        }
+
+        $email = $user->get('email');
+        if (! $email) {
+            continue;
+        }
+
+        $subject = 'A table has become available';
+        $body    = "Good news!\n\n";
+        $body   .= "A booking has just been cancelled for Table {$squareName}.\n";
+        $body   .= "Date and time: " . $start->format('d.m.Y H:i') . ' - ' . $end->format('H:i') . "\n\n";
+        $body   .= "If you are still interested in this slot, please log in and make a booking as soon as possible.\n\n";
+        $body   .= "Best regards,\n";
+        $body   .= $fromName . "\n";
+
+        $this->userMailService->send(
+            $user,
+            $subject,
+            $body
+        );
+    
+
+        // ---------------------------------------------------------
+        // SMS / TEXT NOTIFICATION VIA TWILIO
+        //
+        // Reuse notify_cancel_whatsapp as the "mobile alert" flag.
+        // ---------------------------------------------------------
+        $notifySms = (int) $user->get('notify_cancel_whatsapp');
+        //$phone     = $user->getMeta('phone');
+        $rawPhone = $user->getMeta('phone');
+        $phone    = $this->normalizeUkNumber($rawPhone);
+
+        if ($notifySms === 1 && $phone) {
+
+                // Short SMS-friendly text
+                $smsBody  = "Booking alert: a table ({$squareName}) became free.\n";
+                $smsBody .= "Time: {$dateLine}, {$timeRange}.\n";
+                $smsBody .= "Log in to SSA bookings to reserve it.";
+
+                //test debug
+                    $this->userMailService->send(
+                        $user,
+                        'DEBUG: SMS branch hit',
+                    
+                        "Would send SMS to: {$phone} (raw: {$rawPhone})"
+                    );
+
+                //$this->sendTwilioSms($phone, $smsBody);
+                $this->sendTwilioSms('+447743960776', $smsBody);
+        }
+    }
+    // 3) Try to mark interests as notified if the column exists – ignore errors
+    try {
+        $now        = (new \DateTime())->format('Y-m-d H:i:s');
+        $updateSql  = 'UPDATE bs_booking_interest SET notified_at = ? WHERE interest_date = ?';
+        $updateStmt = $this->dbAdapter->createStatement($updateSql, array($now, $dateStr));
+        $updateStmt->execute();
+    } catch (\Throwable $e) {
+        // If notified_at doesn't exist or update fails, we just ignore it.
+    }
+}
 
     protected function t($message, $textDomain = 'default', $locale = null)
     {
