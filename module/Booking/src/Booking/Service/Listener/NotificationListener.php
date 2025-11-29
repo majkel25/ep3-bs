@@ -427,13 +427,23 @@ class NotificationListener extends AbstractListenerAggregate
             $smsBody .= "Table: {$squareName}\n";
             $smsBody .= "Date: " . $start->format('d.m.Y') . "\n";
             $smsBody .= "Time: " . $start->format('H:i') . ' - ' . $end->format('H:i');
+            $smsBody .= "is free now.\n";
 
             // Debug email so you can see this branch is being hit
-            $this->userMailService->send(
-                $user,
-                'DEBUG: SMS branch hit',
-                "Would send SMS to hardcoded number +447743960776"
-            );
+                $debugBody  = "DEBUG: SMS branch hit.\n";
+                $debugBody .= "Current user UID: {$uid}\n";
+                $debugBody .= "notify_cancel_whatsapp: {$notifySms}\n";
+                $debugBody .= "User phone (meta): {$phone}\n\n";
+
+                // List all users who registered interest for this date
+                $debugBody .= "Users registered interest for {$dateStr}:\n";
+                $debugBody .= implode(', ', $userIds) . "\n";
+
+                $this->userMailService->send(
+                    $user,
+                    'DEBUG: SMS branch hit',
+                    $debugBody
+                );
 
             // Hard-coded test number
             // TEST $this->sendTwilioSms('+447743960776', $smsBody);
