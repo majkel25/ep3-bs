@@ -149,14 +149,14 @@ class NotificationListener extends AbstractListenerAggregate
         $vCalendar->addComponent($vEvent);
 
         // Convert to ICS file content
-        $icsContent = $vCalendar->render(); 
+        $icsContent = $vCalendar->render();
 
         // MailService expects array of attachments:
         $attachments = [
             [
-                'name'     => 'booking.ics',
-                'type'     => 'text/calendar',
-                'content'  => $icsContent,
+                'name'    => 'booking.ics',
+                'type'    => 'text/calendar',
+                'content' => $icsContent,
             ],
         ];
 
@@ -193,18 +193,14 @@ class NotificationListener extends AbstractListenerAggregate
 
         $message .= "\n\n" . $this->t('With kind regards') . ",\n"
             . $this->optionManager->get('client.name.full') . "\n\n";
-        //    . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
-        //    . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
-        // Use existing MailService::send signature (recipient, subject, text)
+        // Use existing MailService::send signature (recipient, subject, text, attachments)
         $this->userMailService->send(
             $user,
             $subject,
             $message,
             $attachments
         );
-
- 
 
         // Notify backend
         $backendSubject = sprintf(
@@ -319,7 +315,6 @@ class NotificationListener extends AbstractListenerAggregate
             $dateRangerHelper($reservationStart, $reservationEnd)
         );
 
-        // Bill breakdown removed – your BillManager doesn’t expose getByBooking()
         $this->backendMailService->send(
             $backendSubject,
             $backendMessage
@@ -328,141 +323,81 @@ class NotificationListener extends AbstractListenerAggregate
 
     /**
      * Notify users who registered interest for the day of this cancellation.
-     * We treat "registration of interest" as consent, ignoring notify_cancel_email flag.
+     * For now we send a simple email via UserMailService to each interested user.
      */
     protected function notifyInterestedUsers(\DateTime $start, \DateTime $end, $squareName)
-{
-    if (! $this->dbAdapter) {
-        return;
-    }
-
-    $dateStr = $start->format('Y-m-d');
-
-    // 1) Get all interests for this date (no assumptions about notified_at)
-    $sql    = 'SELECT * FROM bs_booking_interest WHERE interest_date = ?';
-    $stmt   = $this->dbAdapter->createStatement($sql, array($dateStr));
-    $result = $stmt->execute();
-
-    $userIds = array();
-
-    foreach ($result as $row) {
-        $uid = null;
-
-        if (isset($row['user_id'])) {
-            $uid = (int) $row['user_id'];
-        } elseif (isset($row['uid'])) {
-            $uid = (int) $row['uid'];
+    {
+        if (! $this->dbAdapter) {
+            return;
         }
 
-        if ($uid) {
-            $userIds[] = $uid;
+        $dateStr = $start->format('Y-m-d');
+
+        // 1) Get all interests for this date
+        $sql    = 'SELECT user_id, uid FROM bs_booking_interest WHERE interest_date = ?';
+        $stmt   = $this->dbAdapter->createStatement($sql, array($dateStr));
+        $result = $stmt->execute();
+
+        $userIds = array();
+
+        foreach ($result as $row) {
+            $uid = null;
+
+            if (isset($row['user_id'])) {
+                $uid = (int) $row['user_id'];
+            } elseif (isset($row['uid'])) {
+                $uid = (int) $row['uid'];
+            }
+
+            if ($uid) {
+                $userIds[$uid] = true;
+            }
         }
-    }
 
-    $userIds = array_values(array_unique($userIds));
+        $userIds = array_keys($userIds);
 
-    if (empty($userIds)) {
-        return;
-    }
+        if (empty($userIds)) {
+            error_log('SSA NotificationListener::notifyInterestedUsers: no interested users for ' . $dateStr);
+            return;
+        }
 
-    // 2) For each user, send email ONLY if:
-    //    - they have an email address, and
-    //    - their profile flag notify_cancel_email is enabled (== 1)
-    $fromName = $this->optionManager->get('client.name.full');
+        // Format slot text
+        $slotText = $start->format('j M Y, H:i') . ' – ' . $end->format('H:i');
 
+        $subject = 'Booking alert: a table became free.';
+        $bodyTemplate =
+            "Booking alert: a table (%s) became free.\n" .
+            "Time: %s.\n" .
+            "Log in to SSA bookings to reserve it.\n\n" .
+            "SSA Table Bookings\n" .
+            "https://booking.surreysnookeracademy.com/";
 
-    //test addition
-    foreach ($userIds as $uid) {
-            if (! isset($users[$uid])) {
-                error_log('SSA BookingInterestService::notifyCancellation: no contact record for uid=' . $uid);
+        foreach ($userIds as $uid) {
+            try {
+                $user = $this->userManager->get($uid);
+            } catch (\Throwable $e) {
+                error_log(
+                    'SSA NotificationListener::notifyInterestedUsers: failed to load user ' .
+                    $uid . ': ' . $e->getMessage()
+                );
                 continue;
             }
 
-            $contact = $users[$uid];
+            $body = sprintf($bodyTemplate, $squareName, $slotText);
 
-            // ---------------- EMAIL ----------------
-            if (! empty($contact['email'])) {
-                $email = $contact['email'];
-
-                error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: sending EMAIL to uid=%d <%s>',
-                    $uid,
-                    $email
-                ));
-
-                if (! isset($sentEmails[$email])) {
-                    try {
-                        $this->sendEmail($email, $emailBody);
-                        $sentEmails[$email] = true;
-                    } catch (\Throwable $e) {
-                        error_log(sprintf(
-                            'SSA BookingInterestService::notifyCancellation: sendEmail FAILED for <%s>: %s',
-                            $email,
-                            $e->getMessage()
-                        ));
-                    }
-                }
-            } else {
-                error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: NOT sending email to uid=%d (email empty)',
-                    $uid
-                ));
-            }
-
-            // ---------------- WHATSAPP ----------------
-            if ($this->whatsApp
-                && ! empty($contact['notify_cancel_whatsapp'])
-                && ! empty($contact['phone'])
-            ) {
-                $phone = $contact['phone'];
-
-                error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: sending WHATSAPP to uid=%d (%s)',
-                    $uid,
-                    $phone
-                ));
-
-                try {
-                    $this->sendWhatsApp($phone, $waUserText);
-                } catch (\Throwable $e) {
-                    error_log(sprintf(
-                        'SSA BookingInterestService::notifyCancellation: sendWhatsApp FAILED for %s: %s',
-                        $phone,
-                        $e->getMessage()
-                    ));
-                }
-            }
-
-            // ---------------- TWILIO SMS ----------------
-            if (! empty($contact['phone'])) {
-                $phone = $contact['phone'];
-
-                error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: sending Twilio SMS to uid=%d (%s)',
-                    $uid,
-                    $phone
-                ));
-
-                try {
-                    $this->sendTwilioSms($phone, $waUserText);
-                } catch (\Throwable $e) {
-                    error_log(sprintf(
-                        'SSA BookingInterestService::notifyCancellation: sendTwilioSms FAILED for %s: %s',
-                        $phone,
-                        $e->getMessage()
-                    ));
-                }
-            } else {
-                error_log(sprintf(
-                    'SSA BookingInterestService::notifyCancellation: NOT sending SMS, no phone for uid=%d',
-                    $uid
-                ));
+            try {
+                $this->userMailService->send($user, $subject, $body);
+                error_log(
+                    'SSA NotificationListener::notifyInterestedUsers: sent interest email to uid=' . $uid
+                );
+            } catch (\Throwable $e) {
+                error_log(
+                    'SSA NotificationListener::notifyInterestedUsers: failed to send email to uid=' .
+                    $uid . ': ' . $e->getMessage()
+                );
             }
         }
-// end of test addition
-
-
- 
+    }
 
     protected function t($message, $textDomain = 'default', $locale = null)
     {
