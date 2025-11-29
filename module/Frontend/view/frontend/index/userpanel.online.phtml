@@ -14,71 +14,105 @@ if (isset($this->dateNow) && $this->dateNow instanceof \DateTimeInterface) {
 }
 ?>
 
-<table style="height: 100%;">
-    <tr>
-        <td class="responsive-pass-4" style="padding-right: 12px; border-right: solid 1px #CCC;">
-            <div id="userpanel-status" class="no-wrap">
-                <?= sprintf($this->t('Online as %s'), $this->escapeHtml($this->user->need('alias'))) ?>
-            </div>
-        </td>
+<style>
+/* === Responsive user panel === */
 
-        <td class="responsive-pass-4" style="padding-right: 12px;"></td>
+.userpanel {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0;
+}
+
+.userpanel-status {
+    margin-right: 12px;
+    white-space: nowrap;
+}
+
+.userpanel-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.userpanel-buttons .default-button {
+    white-space: nowrap;
+}
+
+/* Tablets / small screens */
+@media (max-width: 768px) {
+    .userpanel {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .userpanel-status {
+        margin-right: 0;
+        margin-bottom: 6px;
+    }
+
+    .userpanel-buttons {
+        width: 100%;
+    }
+
+    /* roughly 2 buttons per row */
+    .userpanel-buttons .default-button {
+        flex: 1 1 48%;
+        text-align: center;
+    }
+}
+
+/* Very small phones */
+@media (max-width: 480px) {
+    /* allow up to 3 buttons per row if needed */
+    .userpanel-buttons .default-button {
+        flex: 1 1 30%;
+    }
+}
+</style>
+
+<div class="userpanel">
+    <div id="userpanel-status" class="userpanel-status no-wrap">
+        <?= sprintf($this->t('Online as %s'), $this->escapeHtml($this->user->need('alias'))) ?>
+    </div>
+
+    <div class="userpanel-buttons">
 
         <?php if ($this->user->can('admin.see-menu')): ?>
 
             <?php $this->headScript()->appendFile($this->basePath('js/controller/frontend/index.admin.min.js')) ?>
 
-            <td class="responsive-pass-4" style="padding-right: 12px; border-right: solid 1px #CCC;">
-                <a href="<?= $this->url('backend') ?>" id="admin-menu-link" class="default-button">
-                    <span class="symbolic symbolic-config"><?= $this->t('Administration') ?></span>
-                </a>
-            </td>
-
-            <td class="responsive-pass-4" style="padding-right: 12px;"></td>
+            <a href="<?= $this->url('backend') ?>" id="admin-menu-link" class="default-button">
+                <span class="symbolic symbolic-config"><?= $this->t('Administration') ?></span>
+            </a>
 
         <?php endif; ?>
 
-        <td>
-            <a href="<?= $this->url('user/bookings') ?>"
-               class="default-button"
-               data-tooltip="<?= $this->userLastBookings($this->user) ?>">
-                <span class="symbolic symbolic-booking"><?= $this->t('My bookings') ?></span>
-            </a>
-        </td>
+        <a href="<?= $this->url('user/bookings') ?>"
+           class="default-button"
+           data-tooltip="<?= $this->userLastBookings($this->user) ?>">
+            <span class="symbolic symbolic-booking"><?= $this->t('My bookings') ?></span>
+        </a>
 
         <?php if ($this->user && $interestDate): ?>
-            <!-- Notify-me button, next to "My bookings" -->
-            <td>
-                <button id="notify-day-btn"
-                        type="button"
-                        class="default-button"
-                        data-date="<?= $this->escapeHtmlAttr($interestDate) ?>">
-                    <span class="symbolic symbolic-booking">
-                        <?= $this->t('Notify me if a slot opens') ?>
-                    </span>
-                </button>
-            </td>
+            <button id="notify-day-btn"
+                    type="button"
+                    class="default-button"
+                    data-date="<?= $this->escapeHtmlAttr($interestDate) ?>">
+                <span class="symbolic symbolic-booking">
+                    <?= $this->t('Notify me if a slot opens') ?>
+                </span>
+            </button>
         <?php endif; ?>
 
-        <td>
-            <a href="<?= $this->url('user/settings') ?>" class="default-button">
-                <span class="symbolic symbolic-user"><?= $this->t('My account') ?></span>
-            </a>
-        </td>
+        <a href="<?= $this->url('user/settings') ?>" class="default-button">
+            <span class="symbolic symbolic-user"><?= $this->t('My account') ?></span>
+        </a>
 
-        <td style="padding-right: 12px;">
-            <a href="<?= $this->url('user/logout') ?>" class="default-button">
-                <span class="symbolic symbolic-off"><?= $this->t('Logout') ?></span>
-            </a>
-        </td>
+        <a href="<?= $this->url('user/logout') ?>" class="default-button">
+            <span class="symbolic symbolic-off"><?= $this->t('Logout') ?></span>
+        </a>
 
-        <td style="padding-left: 12px; border-left: solid 1px #CCC;">
-            <a href="<?= $this->url('service/help') ?>" class="default-button"
-               data-tooltip="<?= sprintf($this->t('Get additional %shelp and information%s'), '<b>', '</b>') ?>">
-                <b>?</b>
-            </a>
-        </td>
-    </tr>
-</table>
-
-
+        <a href="<?= $this->url('service/help') ?>" class="default-button"
+           data-tooltip="<?= sprintf($this->t('Get ad

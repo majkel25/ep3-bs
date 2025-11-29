@@ -293,9 +293,9 @@ class NotificationListener extends AbstractListenerAggregate
         }
 
         $message .= "\n\n" . $this->t('With kind regards') . ",\n"
-            . $this->optionManager->get('client.name.full') . "\n\n"
-            . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
-            . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
+            . $this->optionManager->get('client.name.full') . "\n\n";
+        //    . $this->t('Contact phone') . ': ' . $this->optionManager->get('client.phone') . "\n"
+        //    . $this->t('Contact e-mail') . ': ' . $this->optionManager->get('client.email');
 
         $this->userMailService->send(
             $user,
