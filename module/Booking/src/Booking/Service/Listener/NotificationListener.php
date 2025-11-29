@@ -122,6 +122,7 @@ class NotificationListener extends AbstractListenerAggregate
         method_exists($booking, 'get') ? (string) $booking->get('bid') : 'n/a',
         method_exists($booking, 'get') ? (string) $booking->get('uid') : 'n/a',
         isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : 'cli'
+        ));
         //end of DEBUG
         
         $booking     = $event->getTarget();
