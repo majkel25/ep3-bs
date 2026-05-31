@@ -122,11 +122,34 @@ function ssaApiBlockMinutes($value): ?int
     return null;
 }
 
+function ssaApiGetStatusFilter(): ?string
+{
+    if (!isset($_GET['status']) || trim((string)$_GET['status']) === '') {
+        return null;
+    }
+
+    $status = strtolower(trim((string)$_GET['status']));
+    $allowedStatuses = ['enabled', 'disabled', 'all'];
+
+    if (!in_array($status, $allowedStatuses, true)) {
+        ssaApiJsonResponse(400, [
+            'error' => 'invalid_status_filter',
+            'message' => 'The status filter must be one of: enabled, disabled, all.',
+        ]);
+    }
+
+    if ($status === 'all') {
+        return null;
+    }
+
+    return $status;
+}
+
 try {
     $pdo = ssaApiCreatePdo();
+    $statusFilter = ssaApiGetStatusFilter();
 
-    $statement = $pdo->query(
-        'SELECT
+    $sql = 'SELECT
             sid,
             name,
             status,
@@ -141,9 +164,19 @@ try {
             range_book,
             max_active_bookings,
             range_cancel
-         FROM bs_squares
-         ORDER BY priority ASC, sid ASC'
-    );
+         FROM bs_squares';
+
+    $params = [];
+
+    if ($statusFilter !== null) {
+        $sql .= ' WHERE status = :status';
+        $params['status'] = $statusFilter;
+    }
+
+    $sql .= ' ORDER BY priority ASC, sid ASC';
+
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
 
     $rows = $statement->fetchAll();
 
@@ -172,6 +205,9 @@ try {
     ssaApiJsonResponse(200, [
         'status' => 'ok',
         'source' => 'live_database',
+        'filter' => [
+            'status' => $statusFilter ?? 'all',
+        ],
         'count' => count($tables),
         'tables' => $tables,
     ]);
