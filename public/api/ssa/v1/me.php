@@ -1,185 +1,92 @@
 <?php
 require_once __DIR__ . '/_auth0.php';
+require_once __DIR__ . '/_db.php';
 
-ssaApiRequireAuth0Claims();
+$claims = ssaApiRequireAuth0Claims();
 
-function ssaApiAppRoot(): string
-{
-    $root = realpath(__DIR__ . '/../../../..');
+$auth0Sub = isset($claims['sub']) ? trim((string)$claims['sub']) : '';
 
-    if (!$root) {
-        ssaApiJsonResponse(500, [
-            'error' => 'app_root_not_found',
-            'message' => 'Unable to determine application root.',
-        ]);
-    }
-
-    return $root;
-}
-
-function ssaApiLoadLocalConfig(): array
-{
-    $configFile = ssaApiAppRoot() . '/config/autoload/local.php';
-
-    if (!is_file($configFile)) {
-        ssaApiJsonResponse(500, [
-            'error' => 'local_config_not_found',
-            'message' => 'Database configuration file was not found.',
-        ]);
-    }
-
-    $config = include $configFile;
-
-    if (!is_array($config) || !isset($config['db']) || !is_array($config['db'])) {
-        ssaApiJsonResponse(500, [
-            'error' => 'db_config_invalid',
-            'message' => 'Database configuration is invalid.',
-        ]);
-    }
-
-    return $config;
-}
-
-function ssaApiCreatePdo(): PDO
-{
-    $config = ssaApiLoadLocalConfig();
-    $db = $config['db'];
-
-    $database = $db['database'] ?? null;
-    $username = $db['username'] ?? null;
-    $password = $db['password'] ?? null;
-    $hostname = $db['hostname'] ?? ($db['host'] ?? 'localhost');
-    $port = $db['port'] ?? null;
-
-    if (!$database || !$username) {
-        ssaApiJsonResponse(500, [
-            'error' => 'db_config_missing',
-            'message' => 'Database name or username is missing.',
-        ]);
-    }
-
-    $dsn = 'mysql:host=' . $hostname . ';dbname=' . $database . ';charset=utf8mb4';
-
-    if ($port) {
-        $dsn .= ';port=' . $port;
-    }
-
-    try {
-        return new PDO($dsn, $username, $password, [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false,
-        ]);
-    } catch (Throwable $exception) {
-        error_log('SSA API DB connection failed: ' . $exception->getMessage());
-
-        ssaApiJsonResponse(500, [
-            'error' => 'db_connection_failed',
-            'message' => 'Unable to connect to the booking database.',
-        ]);
-    }
-}
-
-function ssaApiNormaliseTimeValue($value): ?string
-{
-    if ($value === null || $value === '') {
-        return null;
-    }
-
-    if (is_numeric($value)) {
-        $seconds = (int)$value;
-        $hours = intdiv($seconds, 3600);
-        $minutes = intdiv($seconds % 3600, 60);
-
-        return sprintf('%02d:%02d', $hours, $minutes);
-    }
-
-    $value = (string)$value;
-
-    if (preg_match('/^\d{2}:\d{2}/', $value)) {
-        return substr($value, 0, 5);
-    }
-
-    return $value;
-}
-
-function ssaApiBlockMinutes($value): ?int
-{
-    if ($value === null || $value === '') {
-        return null;
-    }
-
-    if (is_numeric($value)) {
-        $seconds = (int)$value;
-
-        if ($seconds >= 60) {
-            return (int)round($seconds / 60);
-        }
-
-        return $seconds;
-    }
-
-    return null;
+if ($auth0Sub === '') {
+    ssaApiJsonResponse(401, [
+        'error' => 'missing_auth0_subject',
+        'message' => 'Auth0 token does not contain a subject.',
+    ]);
 }
 
 try {
     $pdo = ssaApiCreatePdo();
 
-    $statement = $pdo->query(
+    $statement = $pdo->prepare(
         'SELECT
-            sid,
-            name,
-            status,
-            priority,
-            capacity,
-            time_start,
-            time_end,
-            time_block,
-            time_block_bookable,
-            time_block_bookable_max,
-            min_range_book,
-            range_book,
-            max_active_bookings,
-            range_cancel
-         FROM bs_squares
-         ORDER BY priority ASC, sid ASC'
+            id,
+            uid,
+            linked_email,
+            linked_alias,
+            created_at,
+            updated_at,
+            last_seen_at,
+            revoked_at
+         FROM ssa_auth0_user_links
+         WHERE auth0_sub = :auth0Sub
+           AND revoked_at IS NULL
+         LIMIT 1'
     );
 
-    $rows = $statement->fetchAll();
+    $statement->execute([
+        'auth0Sub' => $auth0Sub,
+    ]);
 
-    $tables = [];
+    $link = $statement->fetch();
 
-    foreach ($rows as $row) {
-        $tables[] = [
-            'id' => isset($row['sid']) ? (int)$row['sid'] : null,
-            'name' => $row['name'] ?? null,
-            'status' => $row['status'] ?? null,
-            'priority' => isset($row['priority']) ? (int)$row['priority'] : null,
-            'capacity' => isset($row['capacity']) ? (int)$row['capacity'] : null,
-            'timeStart' => ssaApiNormaliseTimeValue($row['time_start'] ?? null),
-            'timeEnd' => ssaApiNormaliseTimeValue($row['time_end'] ?? null),
-            'timeBlockSeconds' => isset($row['time_block']) && is_numeric($row['time_block']) ? (int)$row['time_block'] : null,
-            'timeBlockMinutes' => ssaApiBlockMinutes($row['time_block'] ?? null),
-            'timeBlockBookableSeconds' => isset($row['time_block_bookable']) && is_numeric($row['time_block_bookable']) ? (int)$row['time_block_bookable'] : null,
-            'timeBlockBookableMaxSeconds' => isset($row['time_block_bookable_max']) && is_numeric($row['time_block_bookable_max']) ? (int)$row['time_block_bookable_max'] : null,
-            'minRangeBookSeconds' => isset($row['min_range_book']) && is_numeric($row['min_range_book']) ? (int)$row['min_range_book'] : null,
-            'rangeBookSeconds' => isset($row['range_book']) && is_numeric($row['range_book']) ? (int)$row['range_book'] : null,
-            'maxActiveBookings' => isset($row['max_active_bookings']) ? (int)$row['max_active_bookings'] : null,
-            'rangeCancelSeconds' => isset($row['range_cancel']) && is_numeric($row['range_cancel']) ? (int)$row['range_cancel'] : null,
-        ];
+    if ($link) {
+        $updateStatement = $pdo->prepare(
+            'UPDATE ssa_auth0_user_links
+             SET last_seen_at = NOW()
+             WHERE id = :id'
+        );
+
+        $updateStatement->execute([
+            'id' => (int)$link['id'],
+        ]);
+
+        ssaApiJsonResponse(200, [
+            'status' => 'ok',
+            'linked' => true,
+            'auth0' => [
+                'sub' => $auth0Sub,
+                'email' => $claims['email'] ?? null,
+                'email_verified' => $claims['email_verified'] ?? null,
+                'scope' => $claims['scope'] ?? null,
+            ],
+            'user' => [
+                'uid' => isset($link['uid']) ? (int)$link['uid'] : null,
+                'alias' => $link['linked_alias'] ?? null,
+                'email' => $link['linked_email'] ?? null,
+            ],
+            'link' => [
+                'createdAt' => $link['created_at'] ?? null,
+                'updatedAt' => $link['updated_at'] ?? null,
+                'lastSeenAt' => gmdate('Y-m-d H:i:s'),
+            ],
+        ]);
     }
 
     ssaApiJsonResponse(200, [
         'status' => 'ok',
-        'source' => 'live_database',
-        'count' => count($tables),
-        'tables' => $tables,
+        'linked' => false,
+        'auth0' => [
+            'sub' => $auth0Sub,
+            'email' => $claims['email'] ?? null,
+            'email_verified' => $claims['email_verified'] ?? null,
+            'scope' => $claims['scope'] ?? null,
+        ],
+        'message' => 'Auth0 token is valid, but no booking account is linked yet.',
     ]);
 } catch (Throwable $exception) {
-    error_log('SSA API tables endpoint failed: ' . $exception->getMessage());
+    error_log('SSA API me endpoint failed: ' . $exception->getMessage());
 
     ssaApiJsonResponse(500, [
-        'error' => 'tables_query_failed',
-        'message' => 'Unable to read tables from the booking database.',
+        'error' => 'me_lookup_failed',
+        'message' => 'Unable to read linked account status.',
     ]);
 }
