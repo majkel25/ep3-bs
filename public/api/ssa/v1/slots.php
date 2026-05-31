@@ -35,9 +35,14 @@ function ssaApiFetchReservationsForSlots(PDO $pdo, string $from, string $to, arr
             b.status_billing,
             b.visibility,
             b.quantity,
-            b.created
+            b.created,
+            u.firstname,
+            u.lastname,
+            u.name,
+            u.alias
         FROM bs_reservations r
         INNER JOIN bs_bookings b ON b.bid = r.bid
+        LEFT JOIN bs_users u ON u.uid = b.uid
         WHERE r.date >= :from
           AND r.date <= :to
           AND b.status <> :cancelledStatus
@@ -199,6 +204,7 @@ try {
                     $slot['reservationId'] = isset($overlap['rid']) ? (int)$overlap['rid'] : null;
                     $slot['bookingId'] = isset($overlap['bid']) ? (int)$overlap['bid'] : null;
                     $slot['userId'] = isset($overlap['uid']) ? (int)$overlap['uid'] : null;
+                    $slot['bookedBy'] = ssaApiPublicBookedBy($overlap);
                     $slot['bookingStatus'] = $bookingStatus;
                     $slot['billingStatus'] = $overlap['status_billing'] ?? null;
                     $slot['visibility'] = $overlap['visibility'] ?? null;

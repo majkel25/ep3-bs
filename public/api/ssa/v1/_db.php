@@ -301,3 +301,41 @@ function ssaApiFormatSquareRow(array $row): array
         'rangeCancelSeconds' => isset($row['range_cancel']) && is_numeric($row['range_cancel']) ? (int)$row['range_cancel'] : null,
     ];
 }
+
+function ssaApiBuildUserDisplayName(array $row): string
+{
+    $parts = [];
+
+    if (isset($row['firstname']) && trim((string)$row['firstname']) !== '') {
+        $parts[] = trim((string)$row['firstname']);
+    }
+
+    if (isset($row['lastname']) && trim((string)$row['lastname']) !== '') {
+        $parts[] = trim((string)$row['lastname']);
+    }
+
+    if (count($parts) > 0) {
+        return implode(' ', $parts);
+    }
+
+    if (isset($row['name']) && trim((string)$row['name']) !== '') {
+        return trim((string)$row['name']);
+    }
+
+    if (isset($row['alias']) && trim((string)$row['alias']) !== '') {
+        return trim((string)$row['alias']);
+    }
+
+    return 'Booked';
+}
+
+function ssaApiPublicBookedBy(array $row): string
+{
+    $visibility = isset($row['visibility']) ? strtolower((string)$row['visibility']) : 'public';
+
+    if ($visibility !== 'public') {
+        return 'Booked';
+    }
+
+    return ssaApiBuildUserDisplayName($row);
+}

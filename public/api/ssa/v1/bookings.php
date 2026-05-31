@@ -30,10 +30,15 @@ try {
             b.quantity,
             b.created,
             s.name AS table_name,
-            s.status AS table_status
+            s.status AS table_status,
+            u.firstname,
+            u.lastname,
+            u.name,
+            u.alias
         FROM bs_reservations r
         INNER JOIN bs_bookings b ON b.bid = r.bid
         LEFT JOIN bs_squares s ON s.sid = b.sid
+        LEFT JOIN bs_users u ON u.uid = b.uid
         WHERE r.date >= :from
           AND r.date <= :to
           AND b.status <> :cancelledStatus';
@@ -64,6 +69,7 @@ try {
             'reservationId' => isset($row['rid']) ? (int)$row['rid'] : null,
             'bookingId' => isset($row['bid']) ? (int)$row['bid'] : null,
             'userId' => isset($row['uid']) ? (int)$row['uid'] : null,
+            'bookedBy' => ssaApiPublicBookedBy($row),
             'tableId' => isset($row['sid']) ? (int)$row['sid'] : null,
             'tableName' => $row['table_name'] ?? null,
             'tableStatus' => $row['table_status'] ?? null,
