@@ -1,159 +1,8 @@
 <?php
 require_once __DIR__ . '/_auth0.php';
+require_once __DIR__ . '/_db.php';
 
 ssaApiRequireAuth0Claims();
-
-function ssaApiAppRoot(): string
-{
-    $root = realpath(__DIR__ . '/../../../..');
-
-    if (!$root) {
-        ssaApiJsonResponse(500, [
-            'error' => 'app_root_not_found',
-            'message' => 'Unable to determine application root.',
-        ]);
-    }
-
-    return $root;
-}
-
-function ssaApiLoadLocalConfig(): array
-{
-    $configFile = ssaApiAppRoot() . '/config/autoload/local.php';
-
-    if (!is_file($configFile)) {
-        ssaApiJsonResponse(500, [
-            'error' => 'local_config_not_found',
-            'message' => 'Database configuration file was not found.',
-        ]);
-    }
-
-    $config = include $configFile;
-
-    if (!is_array($config) || !isset($config['db']) || !is_array($config['db'])) {
-        ssaApiJsonResponse(500, [
-            'error' => 'db_config_invalid',
-            'message' => 'Database configuration is invalid.',
-        ]);
-    }
-
-    return $config;
-}
-
-function ssaApiCreatePdo(): PDO
-{
-    $config = ssaApiLoadLocalConfig();
-    $db = $config['db'];
-
-    $database = $db['database'] ?? null;
-    $username = $db['username'] ?? null;
-    $password = $db['password'] ?? null;
-    $hostname = $db['hostname'] ?? ($db['host'] ?? 'localhost');
-    $port = $db['port'] ?? null;
-
-    if (!$database || !$username) {
-        ssaApiJsonResponse(500, [
-            'error' => 'db_config_missing',
-            'message' => 'Database name or username is missing.',
-        ]);
-    }
-
-    $dsn = 'mysql:host=' . $hostname . ';dbname=' . $database . ';charset=utf8mb4';
-
-    if ($port) {
-        $dsn .= ';port=' . $port;
-    }
-
-    try {
-        return new PDO($dsn, $username, $password, [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false,
-        ]);
-    } catch (Throwable $exception) {
-        error_log('SSA API DB connection failed: ' . $exception->getMessage());
-
-        ssaApiJsonResponse(500, [
-            'error' => 'db_connection_failed',
-            'message' => 'Unable to connect to the booking database.',
-        ]);
-    }
-}
-
-function ssaApiDateParam(string $name, ?string $default = null): string
-{
-    $value = isset($_GET[$name]) ? trim((string)$_GET[$name]) : $default;
-
-    if (!$value || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
-        ssaApiJsonResponse(400, [
-            'error' => 'invalid_' . $name,
-            'message' => 'Parameter "' . $name . '" must be in YYYY-MM-DD format.',
-        ]);
-    }
-
-    $parts = explode('-', $value);
-
-    if (!checkdate((int)$parts[1], (int)$parts[2], (int)$parts[0])) {
-        ssaApiJsonResponse(400, [
-            'error' => 'invalid_' . $name,
-            'message' => 'Parameter "' . $name . '" is not a valid date.',
-        ]);
-    }
-
-    return $value;
-}
-
-function ssaApiNormaliseTimeValue($value): ?string
-{
-    if ($value === null || $value === '') {
-        return null;
-    }
-
-    if (is_numeric($value)) {
-        $seconds = (int)$value;
-        $hours = intdiv($seconds, 3600);
-        $minutes = intdiv($seconds % 3600, 60);
-
-        return sprintf('%02d:%02d', $hours, $minutes);
-    }
-
-    $value = (string)$value;
-
-    if (preg_match('/^\d{2}:\d{2}/', $value)) {
-        return substr($value, 0, 5);
-    }
-
-    return $value;
-}
-
-function ssaApiDateTimeIso(string $date, $time): ?string
-{
-    $normalisedTime = ssaApiNormaliseTimeValue($time);
-
-    if (!$normalisedTime) {
-        return null;
-    }
-
-    return $date . 'T' . $normalisedTime . ':00+00:00';
-}
-
-function ssaApiGetOptionalIntParam(string $name): ?int
-{
-    if (!isset($_GET[$name]) || trim((string)$_GET[$name]) === '') {
-        return null;
-    }
-
-    $value = trim((string)$_GET[$name]);
-
-    if (!ctype_digit($value)) {
-        ssaApiJsonResponse(400, [
-            'error' => 'invalid_' . $name,
-            'message' => 'Parameter "' . $name . '" must be a positive integer.',
-        ]);
-    }
-
-    return (int)$value;
-}
 
 try {
     $today = gmdate('Y-m-d');
@@ -163,21 +12,7 @@ try {
     $to = ssaApiDateParam('to', $defaultTo);
     $tableId = ssaApiGetOptionalIntParam('tableId');
 
-    if (strtotime($to) < strtotime($from)) {
-        ssaApiJsonResponse(400, [
-            'error' => 'invalid_date_range',
-            'message' => 'Parameter "to" must be the same as or after "from".',
-        ]);
-    }
-
-    $maxRangeSeconds = 60 * 60 * 24 * 62;
-
-    if ((strtotime($to) - strtotime($from)) > $maxRangeSeconds) {
-        ssaApiJsonResponse(400, [
-            'error' => 'date_range_too_large',
-            'message' => 'Date range must not exceed 62 days.',
-        ]);
-    }
+    ssaApiValidateDateRange($from, $to, 62);
 
     $pdo = ssaApiCreatePdo();
 
@@ -220,7 +55,6 @@ try {
     $statement->execute($params);
 
     $rows = $statement->fetchAll();
-
     $reservations = [];
 
     foreach ($rows as $row) {
@@ -236,8 +70,8 @@ try {
             'date' => $date,
             'timeStart' => ssaApiNormaliseTimeValue($row['time_start'] ?? null),
             'timeEnd' => ssaApiNormaliseTimeValue($row['time_end'] ?? null),
-            'start' => ssaApiDateTimeIso($date, $row['time_start'] ?? null),
-            'end' => ssaApiDateTimeIso($date, $row['time_end'] ?? null),
+            'startLocal' => ssaApiDateTimeLocalIso($date, $row['time_start'] ?? null),
+            'endLocal' => ssaApiDateTimeLocalIso($date, $row['time_end'] ?? null),
             'status' => 'occupied',
             'bookingStatus' => $row['booking_status'] ?? null,
             'billingStatus' => $row['status_billing'] ?? null,
@@ -251,6 +85,7 @@ try {
         'status' => 'ok',
         'source' => 'live_database',
         'mode' => 'occupied_reservations_only',
+        'timezone' => SSA_API_TIMEZONE,
         'from' => $from,
         'to' => $to,
         'filter' => [
