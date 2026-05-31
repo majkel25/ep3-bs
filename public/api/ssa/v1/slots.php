@@ -36,9 +36,6 @@ function ssaApiFetchReservationsForSlots(PDO $pdo, string $from, string $to, arr
             b.visibility,
             b.quantity,
             b.created,
-            u.firstname,
-            u.lastname,
-            u.name,
             u.alias
         FROM bs_reservations r
         INNER JOIN bs_bookings b ON b.bid = r.bid

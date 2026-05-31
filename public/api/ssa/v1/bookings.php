@@ -31,9 +31,6 @@ try {
             b.created,
             s.name AS table_name,
             s.status AS table_status,
-            u.firstname,
-            u.lastname,
-            u.name,
             u.alias
         FROM bs_reservations r
         INNER JOIN bs_bookings b ON b.bid = r.bid
