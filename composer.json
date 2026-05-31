@@ -20,7 +20,8 @@
         "zendframework/zend-version": "^2.5.1",
 
         "true/punycode": "^2.1",
-        "eluceo/ical": "^0.16.0"
+        "eluceo/ical": "^0.16.0",
+        "firebase/php-jwt": "~7.0"
 
     },
 
