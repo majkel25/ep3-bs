@@ -142,14 +142,15 @@ try {
     try {
         $updateStatement = $pdo->prepare(
             'UPDATE bs_bookings
-             SET status = :cancelledStatus
+             SET status = :newStatus
              WHERE bid = :bid
                AND uid = :uid
-               AND status <> :cancelledStatus'
+               AND status <> :existingCancelledStatus'
         );
 
         $updateStatement->execute([
-            'cancelledStatus' => 'cancelled',
+            'newStatus' => 'cancelled',
+            'existingCancelledStatus' => 'cancelled',
             'bid' => $bookingId,
             'uid' => $user['uid'],
         ]);
