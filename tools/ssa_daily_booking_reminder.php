@@ -1,0 +1,453 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * CLI-only daily booking reminder push sender for SSA iOS users.
+ *
+ * Safe defaults:
+ * - Requires Europe/London 08:00 local time unless --force is supplied.
+ * - --dry-run never sends APNs pushes and never writes idempotency rows.
+ * - --uid=<uid> limits work to one linked booking user for safe testing.
+ * - One combined notification per user/day; never one push per booking.
+ */
+
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "This script must be run from the command line.\n");
+    exit(1);
+}
+
+if (!function_exists('ssaApiJsonResponse')) {
+    function ssaApiJsonResponse(int $statusCode, array $payload): void
+    {
+        throw new RuntimeException(
+            'API JSON response called during CLI script: HTTP ' .
+            $statusCode .
+            ' ' .
+            json_encode($payload, JSON_UNESCAPED_SLASHES)
+        );
+    }
+}
+
+require_once __DIR__ . '/../public/api/ssa/v1/_db.php';
+require_once __DIR__ . '/../public/api/ssa/v1/_push_apns.php';
+
+const SSA_DAILY_BOOKING_REMINDER_RULE_KEY = 'daily_booking_reminders_8am';
+const SSA_DAILY_BOOKING_REMINDER_EVENT_TYPE = 'daily_booking_reminder';
+const SSA_DAILY_BOOKING_REMINDER_PREFERENCE_KEY = 'daily_booking_reminders';
+const SSA_DAILY_BOOKING_REMINDER_TITLE = 'Surrey Snooker Academy';
+
+function ssaDailyBookingReminderUsage(): string
+{
+    return <<<TXT
+Usage: php tools/ssa_daily_booking_reminder.php [--dry-run] [--uid=<uid>] [--force]
+
+Options:
+  --dry-run     Inspect eligible users/bookings/tokens without sending or writing idempotency rows.
+  --uid=<uid>   Limit to one booking user id. Required for first live manual test.
+  --force       Bypass the Europe/London 08:00 local-time guard for manual testing.
+  --help        Show this help.
+TXT;
+}
+
+function ssaDailyBookingReminderParseOptions(array $argv): array
+{
+    $options = [
+        'dryRun' => false,
+        'uid' => null,
+        'force' => false,
+    ];
+
+    foreach (array_slice($argv, 1) as $arg) {
+        if ($arg === '--help' || $arg === '-h') {
+            echo ssaDailyBookingReminderUsage();
+            exit(0);
+        }
+
+        if ($arg === '--dry-run') {
+            $options['dryRun'] = true;
+            continue;
+        }
+
+        if ($arg === '--force') {
+            $options['force'] = true;
+            continue;
+        }
+
+        if (strpos($arg, '--uid=') === 0) {
+            $uid = substr($arg, strlen('--uid='));
+            if ($uid === '' || !ctype_digit($uid) || (int)$uid <= 0) {
+                throw new InvalidArgumentException('--uid must be a positive integer.');
+            }
+            $options['uid'] = (int)$uid;
+            continue;
+        }
+
+        throw new InvalidArgumentException('Unknown option: ' . $arg);
+    }
+
+    return $options;
+}
+
+function ssaDailyBookingReminderNow(): DateTimeImmutable
+{
+    return new DateTimeImmutable('now', new DateTimeZone(SSA_API_TIMEZONE));
+}
+
+function ssaDailyBookingReminderEnsureLocalTimeGuard(DateTimeImmutable $now, bool $force): void
+{
+    if ($force) {
+        return;
+    }
+
+    if ($now->format('H') !== '08') {
+        throw new RuntimeException(
+            'Outside daily booking reminder window. Local time is ' .
+            $now->format('Y-m-d H:i:s T') .
+            '; expected Europe/London hour 08. Use --force for manual testing.'
+        );
+    }
+}
+
+function ssaDailyBookingReminderEnsureLogTable(PDO $pdo): void
+{
+    $pdo->exec(<<<SQL
+CREATE TABLE IF NOT EXISTS ssa_push_notification_log (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    uid INT UNSIGNED NOT NULL,
+    rule_key VARCHAR(96) NOT NULL,
+    notification_date DATE NOT NULL,
+    event_type VARCHAR(96) NOT NULL,
+    payload_json TEXT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'sending',
+    token_count INT UNSIGNED NOT NULL DEFAULT 0,
+    success_count INT UNSIGNED NOT NULL DEFAULT 0,
+    failure_count INT UNSIGNED NOT NULL DEFAULT 0,
+    error_message VARCHAR(512) NULL,
+    sent_at DATETIME NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_ssa_push_notification_log_rule_date (uid, rule_key, notification_date),
+    KEY idx_ssa_push_notification_log_rule_key (rule_key),
+    KEY idx_ssa_push_notification_log_notification_date (notification_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+SQL);
+}
+
+function ssaDailyBookingReminderFetchBookings(PDO $pdo, string $date, ?int $uid): array
+{
+    $sql = 'SELECT
+            r.rid,
+            r.bid,
+            r.date,
+            r.time_start,
+            r.time_end,
+            b.uid,
+            b.sid,
+            b.status AS booking_status,
+            s.name AS table_name
+        FROM bs_reservations r
+        INNER JOIN bs_bookings b ON b.bid = r.bid
+        LEFT JOIN bs_squares s ON s.sid = b.sid
+        INNER JOIN ssa_auth0_user_links l ON l.uid = b.uid AND l.revoked_at IS NULL
+        WHERE r.date = :date
+          AND b.status <> :cancelledStatus';
+
+    $params = [
+        'date' => $date,
+        'cancelledStatus' => 'cancelled',
+    ];
+
+    if ($uid !== null) {
+        $sql .= ' AND b.uid = :uid';
+        $params['uid'] = $uid;
+    }
+
+    $sql .= ' GROUP BY r.rid, r.bid, r.date, r.time_start, r.time_end, b.uid, b.sid, b.status, s.name
+        ORDER BY b.uid ASC, r.time_start ASC, r.rid ASC';
+
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
+
+    $rows = $statement->fetchAll(PDO::FETCH_ASSOC);
+    $byUid = [];
+
+    foreach ($rows as $row) {
+        $rowUid = isset($row['uid']) ? (int)$row['uid'] : 0;
+        if ($rowUid <= 0) {
+            continue;
+        }
+        $byUid[$rowUid][] = $row;
+    }
+
+    return $byUid;
+}
+
+function ssaDailyBookingReminderFetchTokens(PDO $pdo, array $uids): array
+{
+    $uids = array_values(array_unique(array_filter(array_map('intval', $uids), static fn (int $uid): bool => $uid > 0)));
+
+    if ($uids === []) {
+        return [];
+    }
+
+    $placeholders = [];
+    $params = ['platform' => 'ios'];
+
+    foreach ($uids as $index => $uid) {
+        $key = 'uid' . $index;
+        $placeholders[] = ':' . $key;
+        $params[$key] = $uid;
+    }
+
+    $sql = 'SELECT
+            t.id,
+            t.uid,
+            t.auth0_sub,
+            t.device_token,
+            t.device_token_hash,
+            t.platform,
+            t.environment,
+            t.last_seen_at
+        FROM ssa_push_tokens t
+        INNER JOIN ssa_auth0_user_links l ON l.uid = t.uid
+            AND l.auth0_sub = t.auth0_sub
+            AND l.revoked_at IS NULL
+        WHERE t.enabled = 1
+          AND t.platform = :platform
+          AND t.uid IN (' . implode(', ', $placeholders) . ')
+        ORDER BY t.uid ASC, t.last_seen_at DESC, t.updated_at DESC, t.id DESC';
+
+    $statement = $pdo->prepare($sql);
+    $statement->execute($params);
+
+    $tokensByUid = [];
+    foreach ($statement->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $uid = isset($row['uid']) ? (int)$row['uid'] : 0;
+        if ($uid <= 0) {
+            continue;
+        }
+        $tokensByUid[$uid][] = $row;
+    }
+
+    return $tokensByUid;
+}
+
+function ssaDailyBookingReminderPreferenceAllows(PDO $pdo, int $uid, string $preferenceKey): bool
+{
+    // iOS preferences are currently local-only. When backend preference sync is
+    // added, this is the single rule hook to enforce $preferenceKey per uid.
+    unset($pdo, $uid, $preferenceKey);
+    return true;
+}
+
+function ssaDailyBookingReminderBody(array $bookings): string
+{
+    $first = $bookings[0] ?? [];
+    $tableName = trim((string)($first['table_name'] ?? 'Table'));
+    if ($tableName === '') {
+        $tableName = 'Table';
+    }
+
+    $timeStart = ssaApiNormaliseTimeValue($first['time_start'] ?? null) ?? 'time TBC';
+    $timeEnd = ssaApiNormaliseTimeValue($first['time_end'] ?? null) ?? 'time TBC';
+
+    $body = 'You have table booked today, ' . $tableName . ' - ' . $timeStart . ' to ' . $timeEnd;
+    $extraCount = count($bookings) - 1;
+
+    if ($extraCount > 0) {
+        $body .= ' and ' . $extraCount . ' more.';
+    }
+
+    return $body;
+}
+
+function ssaDailyBookingReminderPayload(array $bookings, string $date): array
+{
+    $first = $bookings[0] ?? [];
+
+    $payload = [
+        'type' => SSA_DAILY_BOOKING_REMINDER_EVENT_TYPE,
+        'screen' => 'myBookings',
+        'date' => $date,
+    ];
+
+    if (isset($first['bid']) && (int)$first['bid'] > 0) {
+        $payload['bookingId'] = (string)(int)$first['bid'];
+    }
+
+    if (isset($first['rid']) && (int)$first['rid'] > 0) {
+        $payload['reservationId'] = (string)(int)$first['rid'];
+    }
+
+    return $payload;
+}
+
+function ssaDailyBookingReminderReserveLog(PDO $pdo, int $uid, string $date, array $payload): ?int
+{
+    $jsonPayload = json_encode($payload, JSON_UNESCAPED_SLASHES);
+    if ($jsonPayload === false) {
+        $jsonPayload = null;
+    }
+
+    $statement = $pdo->prepare(
+        'INSERT IGNORE INTO ssa_push_notification_log
+            (uid, rule_key, notification_date, event_type, payload_json, status, created_at, updated_at)
+         VALUES
+            (:uid, :ruleKey, :notificationDate, :eventType, :payloadJson, :status, UTC_TIMESTAMP(), UTC_TIMESTAMP())'
+    );
+
+    $statement->execute([
+        'uid' => $uid,
+        'ruleKey' => SSA_DAILY_BOOKING_REMINDER_RULE_KEY,
+        'notificationDate' => $date,
+        'eventType' => SSA_DAILY_BOOKING_REMINDER_EVENT_TYPE,
+        'payloadJson' => $jsonPayload,
+        'status' => 'sending',
+    ]);
+
+    if ($statement->rowCount() <= 0) {
+        return null;
+    }
+
+    return (int)$pdo->lastInsertId();
+}
+
+function ssaDailyBookingReminderUpdateLog(PDO $pdo, int $logId, array $sendResult): void
+{
+    $status = ((int)($sendResult['successCount'] ?? 0)) > 0 ? 'sent' : 'failed';
+    $errorMessage = null;
+
+    if ($status === 'failed') {
+        $firstReason = null;
+        foreach (($sendResult['results'] ?? []) as $result) {
+            if (!empty($result['reason'])) {
+                $firstReason = (string)$result['reason'];
+                break;
+            }
+        }
+        $errorMessage = $firstReason !== null ? substr($firstReason, 0, 512) : 'No APNs token accepted the notification.';
+    }
+
+    $sentAtSql = $status === 'sent' ? 'UTC_TIMESTAMP()' : 'sent_at';
+
+    $statement = $pdo->prepare(
+        'UPDATE ssa_push_notification_log
+         SET status = :status,
+             token_count = :tokenCount,
+             success_count = :successCount,
+             failure_count = :failureCount,
+             error_message = :errorMessage,
+             sent_at = ' . $sentAtSql . ',
+             updated_at = UTC_TIMESTAMP()
+         WHERE id = :id'
+    );
+
+    $statement->execute([
+        'status' => $status,
+        'tokenCount' => (int)($sendResult['tokenCount'] ?? 0),
+        'successCount' => (int)($sendResult['successCount'] ?? 0),
+        'failureCount' => (int)($sendResult['failureCount'] ?? 0),
+        'errorMessage' => $errorMessage,
+        'id' => $logId,
+    ]);
+}
+
+function ssaDailyBookingReminderSummariseBookings(array $bookings): array
+{
+    return array_map(static function (array $booking): array {
+        return [
+            'bookingId' => isset($booking['bid']) ? (int)$booking['bid'] : null,
+            'reservationId' => isset($booking['rid']) ? (int)$booking['rid'] : null,
+            'tableName' => $booking['table_name'] ?? null,
+            'timeStart' => ssaApiNormaliseTimeValue($booking['time_start'] ?? null),
+            'timeEnd' => ssaApiNormaliseTimeValue($booking['time_end'] ?? null),
+        ];
+    }, $bookings);
+}
+
+try {
+    $options = ssaDailyBookingReminderParseOptions($argv);
+    $now = ssaDailyBookingReminderNow();
+    ssaDailyBookingReminderEnsureLocalTimeGuard($now, (bool)$options['force']);
+
+    $date = $now->format('Y-m-d');
+    $pdo = ssaApiCreatePdo();
+    ssaDailyBookingReminderEnsureLogTable($pdo);
+
+    $bookingsByUid = ssaDailyBookingReminderFetchBookings($pdo, $date, $options['uid']);
+    $tokensByUid = ssaDailyBookingReminderFetchTokens($pdo, array_keys($bookingsByUid));
+
+    $summary = [
+        'status' => 'ok',
+        'dryRun' => (bool)$options['dryRun'],
+        'forced' => (bool)$options['force'],
+        'timezone' => SSA_API_TIMEZONE,
+        'localTime' => $now->format('Y-m-d H:i:s T'),
+        'notificationDate' => $date,
+        'ruleKey' => SSA_DAILY_BOOKING_REMINDER_RULE_KEY,
+        'preferenceKey' => SSA_DAILY_BOOKING_REMINDER_PREFERENCE_KEY,
+        'eligibleUserCount' => count($bookingsByUid),
+        'processed' => [],
+    ];
+
+    foreach ($bookingsByUid as $uid => $bookings) {
+        $uid = (int)$uid;
+        $tokens = $tokensByUid[$uid] ?? [];
+        $payload = ssaDailyBookingReminderPayload($bookings, $date);
+        $body = ssaDailyBookingReminderBody($bookings);
+        $preferenceAllows = ssaDailyBookingReminderPreferenceAllows($pdo, $uid, SSA_DAILY_BOOKING_REMINDER_PREFERENCE_KEY);
+
+        $item = [
+            'uid' => $uid,
+            'bookingCount' => count($bookings),
+            'tokenCount' => count($tokens),
+            'preferenceAllows' => $preferenceAllows,
+            'title' => SSA_DAILY_BOOKING_REMINDER_TITLE,
+            'body' => $body,
+            'payload' => $payload,
+            'bookings' => ssaDailyBookingReminderSummariseBookings($bookings),
+            'sent' => false,
+            'skippedReason' => null,
+        ];
+
+        if (!$preferenceAllows) {
+            $item['skippedReason'] = 'preference_disabled';
+            $summary['processed'][] = $item;
+            continue;
+        }
+
+        if (count($tokens) === 0) {
+            $item['skippedReason'] = 'no_enabled_ios_tokens';
+            $summary['processed'][] = $item;
+            continue;
+        }
+
+        if ($options['dryRun']) {
+            $item['skippedReason'] = 'dry_run';
+            $summary['processed'][] = $item;
+            continue;
+        }
+
+        $logId = ssaDailyBookingReminderReserveLog($pdo, $uid, $date, $payload);
+        if ($logId === null) {
+            $item['skippedReason'] = 'already_sent_or_reserved_for_rule_date';
+            $summary['processed'][] = $item;
+            continue;
+        }
+
+        $sendResult = ssaPushSendToTokenRows($tokens, SSA_DAILY_BOOKING_REMINDER_TITLE, $body, $payload);
+        ssaDailyBookingReminderUpdateLog($pdo, $logId, $sendResult);
+
+        $item['sent'] = ((int)$sendResult['successCount']) > 0;
+        $item['sendResult'] = $sendResult;
+        $summary['processed'][] = $item;
+    }
+
+    echo json_encode($summary, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+    exit(0);
+} catch (Throwable $exception) {
+    fwrite(STDERR, 'FAILED: ' . $exception->getMessage() . "\n");
+    exit(1);
+}
