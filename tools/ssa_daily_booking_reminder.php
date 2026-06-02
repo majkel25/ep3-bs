@@ -327,7 +327,7 @@ function ssaDailyBookingReminderBody(array $bookings): string
         $body = 'You have a booking today: ' . $tableName . ', ' . $timeStart . "\u{2013}" . $timeEnd;
     } else {
         $total = $extraCount + 1;
-        $body = 'You have ' . $total . ' bookings today, starting with ' . $tableName . ', ' . $timeStart . "\u{2013}" . $timeEnd . '.';
+        $body = 'You have ' . $total . ' bookings today. Tap to view My Bookings.';
     }
 
     return $body;
