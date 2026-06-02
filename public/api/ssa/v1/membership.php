@@ -5,8 +5,12 @@ declare(strict_types=1);
 /**
  * GET /api/ssa/v1/membership.php
  *
- * Returns the authenticated user's current membership, membership history,
- * available plans with benefits, and add-on request states.
+ * Returns the authenticated user's current membership, available plans with
+ * benefits, add-on catalogue with user request state, and membership history.
+ *
+ * If the linked user has no active membership row the response includes
+ * currentMembership: null and membershipStatus: "not_configured".
+ * No membership rows are created automatically.
  *
  * Requires a valid Auth0 Bearer token for a linked booking account.
  */
@@ -32,50 +36,40 @@ if ($auth0Sub === '') {
 }
 
 // -------------------------------------------------------------------------
-// Helpers
+// Helper: format pence as display price string e.g. 12900 → "£129/month"
 // -------------------------------------------------------------------------
-
-function ssaMembershipCurrentPeriod(string $startedAt, string $today): array
+function ssaMembershipPriceDisplay(int $pence, string $currency): string
 {
-    $tz = new DateTimeZone(SSA_API_TIMEZONE);
-    $start = new DateTimeImmutable($startedAt . ' 00:00:00', $tz);
-    $now = new DateTimeImmutable($today . ' 00:00:00', $tz);
-
-    $diff = $start->diff($now);
-    $monthsElapsed = $diff->y * 12 + $diff->m;
-
-    $periodStart = $start->modify('+' . $monthsElapsed . ' months');
-
-    // Guard: if rounding pushed periodStart past today, step back one month.
-    if ($periodStart > $now) {
-        $periodStart = $start->modify('+' . max(0, $monthsElapsed - 1) . ' months');
-    }
-
-    $periodEnd = $periodStart->modify('+1 month');
-    $cancellationDeadline = $periodEnd->modify('-1 day');
-
-    return [
-        'currentPeriodStart' => $periodStart->format('Y-m-d'),
-        'currentPeriodEnd' => $periodEnd->format('Y-m-d'),
-        'cancellationDeadline' => $cancellationDeadline->format('Y-m-d'),
-    ];
+    $symbol = strtoupper($currency) === 'GBP' ? '£' : strtoupper($currency) . ' ';
+    $pounds = $pence / 100;
+    $formatted = ($pounds == floor($pounds))
+        ? $symbol . number_format((int)$pounds)
+        : $symbol . number_format($pounds, 2);
+    return $formatted . '/month';
 }
 
 // -------------------------------------------------------------------------
-// Main
+// Helper: extract Y-m-d from a DATETIME string (or return null)
 // -------------------------------------------------------------------------
+function ssaMembershipDateOnly(?string $datetime): ?string
+{
+    if ($datetime === null || $datetime === '') {
+        return null;
+    }
+    return substr($datetime, 0, 10);
+}
 
 try {
     $pdo = ssaApiCreatePdo();
 
-    // Resolve uid from the Auth0 subject.
-    $linkRow = $pdo->prepare(
+    // Resolve uid from Auth0 subject.
+    $linkStmt = $pdo->prepare(
         'SELECT uid FROM ssa_auth0_user_links
          WHERE auth0_sub = :auth0Sub AND revoked_at IS NULL
          LIMIT 1'
     );
-    $linkRow->execute(['auth0Sub' => $auth0Sub]);
-    $link = $linkRow->fetch(PDO::FETCH_ASSOC);
+    $linkStmt->execute(['auth0Sub' => $auth0Sub]);
+    $link = $linkStmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$link || (int)($link['uid'] ?? 0) <= 0) {
         ssaApiJsonResponse(403, [
@@ -85,177 +79,243 @@ try {
     }
 
     $uid = (int)$link['uid'];
-    $today = (new DateTimeImmutable('now', new DateTimeZone(SSA_API_TIMEZONE)))->format('Y-m-d');
 
     // -------------------------------------------------------------------------
-    // Current membership
+    // Current active membership
     // -------------------------------------------------------------------------
-    $currentRow = $pdo->prepare(
+    $activeMembershipStmt = $pdo->prepare(
         'SELECT
             m.id,
+            m.uid,
+            m.plan_id,
+            m.status,
             m.started_at,
-            m.ended_at,
-            p.slug AS plan_slug,
+            m.current_period_starts_at,
+            m.current_period_ends_at,
+            m.cancellation_notice_deadline_at,
+            m.cancelled_at,
+            m.cancellation_effective_at,
+            m.price_snapshot_pence,
+            m.currency_snapshot,
+            m.plan_name_snapshot,
+            p.plan_key,
             p.name AS plan_name,
-            p.description AS plan_description,
-            p.price_pence
+            p.display_name,
+            p.monthly_price_pence,
+            p.currency,
+            p.table_access_summary,
+            p.coaching_summary
          FROM ssa_user_memberships m
          INNER JOIN ssa_membership_plans p ON p.id = m.plan_id
-         WHERE m.uid = :uid AND m.ended_at IS NULL
+         WHERE m.uid = :uid AND m.status = :status
          ORDER BY m.started_at DESC
          LIMIT 1'
     );
-    $currentRow->execute(['uid' => $uid]);
-    $current = $currentRow->fetch(PDO::FETCH_ASSOC);
+    $activeMembershipStmt->execute(['uid' => $uid, 'status' => 'active']);
+    $activeMembership = $activeMembershipStmt->fetch(PDO::FETCH_ASSOC);
 
     // Member since = earliest started_at across all history rows.
-    $memberSinceRow = $pdo->prepare(
+    $memberSinceStmt = $pdo->prepare(
         'SELECT MIN(started_at) FROM ssa_user_memberships WHERE uid = :uid'
     );
-    $memberSinceRow->execute(['uid' => $uid]);
-    $memberSince = $memberSinceRow->fetchColumn() ?: null;
+    $memberSinceStmt->execute(['uid' => $uid]);
+    $memberSince = $memberSinceStmt->fetchColumn() ?: null;
 
-    $membership = null;
-
-    if ($current) {
-        $period = ssaMembershipCurrentPeriod((string)$current['started_at'], $today);
+    if ($activeMembership) {
+        $pricePence = (int)$activeMembership['price_snapshot_pence'];
+        $currency = (string)$activeMembership['currency_snapshot'];
+        $membershipStatus = 'active';
 
         // Benefits for current plan.
         $benefitsStmt = $pdo->prepare(
-            'SELECT benefit_key, label
+            'SELECT benefit_key, title, description, is_included, sort_order
              FROM ssa_membership_plan_benefits
-             INNER JOIN ssa_membership_plans ON ssa_membership_plans.id = ssa_membership_plan_benefits.plan_id
-             WHERE ssa_membership_plans.slug = :slug
-             ORDER BY ssa_membership_plan_benefits.priority ASC, benefit_key ASC'
+             WHERE plan_id = :planId AND is_included = 1
+             ORDER BY sort_order ASC, benefit_key ASC'
         );
-        $benefitsStmt->execute(['slug' => $current['plan_slug']]);
+        $benefitsStmt->execute(['planId' => (int)$activeMembership['plan_id']]);
         $benefits = array_values(array_map(static fn (array $r): array => [
             'benefitKey' => $r['benefit_key'],
-            'label' => $r['label'],
+            'title' => $r['title'],
+            'description' => $r['description'],
         ], $benefitsStmt->fetchAll(PDO::FETCH_ASSOC)));
 
-        $membership = [
-            'id' => (int)$current['id'],
-            'planSlug' => $current['plan_slug'],
-            'planName' => $current['plan_name'],
-            'memberSince' => $memberSince,
-            'currentPeriodStart' => $period['currentPeriodStart'],
-            'currentPeriodEnd' => $period['currentPeriodEnd'],
-            'cancellationDeadline' => $period['cancellationDeadline'],
+        $currentMembership = [
+            'id' => (int)$activeMembership['id'],
+            'planKey' => $activeMembership['plan_key'],
+            'name' => $activeMembership['plan_name_snapshot'],
+            'displayName' => $activeMembership['display_name'],
+            'pricePence' => $pricePence,
+            'currency' => $currency,
+            'priceDisplay' => ssaMembershipPriceDisplay($pricePence, $currency),
+            'memberSince' => ssaMembershipDateOnly($memberSince),
+            'currentPeriodStart' => ssaMembershipDateOnly($activeMembership['current_period_starts_at']),
+            'currentPeriodEnd' => ssaMembershipDateOnly($activeMembership['current_period_ends_at']),
+            'cancellationNoticeDeadline' => ssaMembershipDateOnly($activeMembership['cancellation_notice_deadline_at']),
+            'cancelledAt' => ssaMembershipDateOnly($activeMembership['cancelled_at']),
+            'cancellationEffectiveAt' => ssaMembershipDateOnly($activeMembership['cancellation_effective_at']),
+            'status' => $activeMembership['status'],
+            'renewsMonthly' => true,
+            'tableAccessSummary' => $activeMembership['table_access_summary'],
+            'coachingSummary' => $activeMembership['coaching_summary'],
             'benefits' => $benefits,
         ];
+    } else {
+        $membershipStatus = 'not_configured';
+        $currentMembership = null;
     }
 
     // -------------------------------------------------------------------------
-    // Available plans (active, with benefits)
+    // Available plans (active + public, with benefits)
     // -------------------------------------------------------------------------
     $plansStmt = $pdo->query(
-        'SELECT id, slug, name, description, price_pence, priority
+        'SELECT id, plan_key, name, display_name, description,
+                monthly_price_pence, currency,
+                table_access_summary, coaching_summary, sort_order
          FROM ssa_membership_plans
-         WHERE is_active = 1
-         ORDER BY priority ASC, id ASC'
+         WHERE is_active = 1 AND is_public = 1
+         ORDER BY sort_order ASC, id ASC'
     );
     $plans = $plansStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $allBenefitsStmt = $pdo->query(
-        'SELECT plan_id, benefit_key, label, priority
-         FROM ssa_membership_plan_benefits
-         ORDER BY plan_id ASC, priority ASC, benefit_key ASC'
-    );
-    $allBenefits = $allBenefitsStmt->fetchAll(PDO::FETCH_ASSOC);
-
+    // Batch-load all benefits for these plans.
+    $planIds = array_column($plans, 'id');
     $benefitsByPlanId = [];
-    foreach ($allBenefits as $b) {
-        $benefitsByPlanId[(int)$b['plan_id']][] = [
-            'benefitKey' => $b['benefit_key'],
-            'label' => $b['label'],
-        ];
+
+    if (!empty($planIds)) {
+        $inPlaceholders = implode(',', array_fill(0, count($planIds), '?'));
+        $allBenefitsStmt = $pdo->prepare(
+            'SELECT plan_id, benefit_key, title, description, is_included, sort_order
+             FROM ssa_membership_plan_benefits
+             WHERE plan_id IN (' . $inPlaceholders . ') AND is_included = 1
+             ORDER BY plan_id ASC, sort_order ASC, benefit_key ASC'
+        );
+        $allBenefitsStmt->execute(array_values($planIds));
+        foreach ($allBenefitsStmt->fetchAll(PDO::FETCH_ASSOC) as $b) {
+            $benefitsByPlanId[(int)$b['plan_id']][] = [
+                'benefitKey' => $b['benefit_key'],
+                'title' => $b['title'],
+                'description' => $b['description'],
+            ];
+        }
     }
 
-    $currentPlanSlug = $current['plan_slug'] ?? null;
-    $availablePlans = array_values(array_map(static function (array $plan) use ($benefitsByPlanId, $currentPlanSlug): array {
-        $pid = (int)$plan['id'];
-        return [
-            'slug' => $plan['slug'],
-            'name' => $plan['name'],
-            'description' => $plan['description'],
-            'pricePence' => (int)$plan['price_pence'],
-            'isCurrent' => $plan['slug'] === $currentPlanSlug,
-            'benefits' => $benefitsByPlanId[$pid] ?? [],
-        ];
-    }, $plans));
+    $currentPlanKey = $activeMembership['plan_key'] ?? null;
+    $availablePlans = array_values(array_map(
+        static function (array $plan) use ($benefitsByPlanId, $currentPlanKey): array {
+            $pid = (int)$plan['id'];
+            $pence = (int)$plan['monthly_price_pence'];
+            $cur = (string)$plan['currency'];
+            return [
+                'planKey' => $plan['plan_key'],
+                'name' => $plan['name'],
+                'displayName' => $plan['display_name'],
+                'description' => $plan['description'],
+                'pricePence' => $pence,
+                'currency' => $cur,
+                'priceDisplay' => ssaMembershipPriceDisplay($pence, $cur),
+                'tableAccessSummary' => $plan['table_access_summary'],
+                'coachingSummary' => $plan['coaching_summary'],
+                'isCurrent' => $plan['plan_key'] === $currentPlanKey,
+                'benefits' => $benefitsByPlanId[$pid] ?? [],
+            ];
+        },
+        $plans
+    ));
 
     // -------------------------------------------------------------------------
-    // Add-ons: list all active addons with user's request status
+    // Add-ons: catalogue + user request state
     // -------------------------------------------------------------------------
     $addonsStmt = $pdo->query(
-        'SELECT id, slug, name, description
+        'SELECT id, addon_key, name, description, monthly_price_pence, currency, sort_order
          FROM ssa_membership_addons
          WHERE is_active = 1
-         ORDER BY id ASC'
+         ORDER BY sort_order ASC, id ASC'
     );
     $addons = $addonsStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Fetch user's most recent request per addon (newest first).
+    // Most recent row per addon for this user.
     $userAddonStmt = $pdo->prepare(
-        'SELECT addon_id, status, requested_at, resolved_at
+        'SELECT addon_id, status, requested_at, activated_at, cancelled_at
          FROM ssa_user_membership_addons
          WHERE uid = :uid
          ORDER BY requested_at DESC'
     );
     $userAddonStmt->execute(['uid' => $uid]);
-    $userAddonRows = $userAddonStmt->fetchAll(PDO::FETCH_ASSOC);
-
     $userAddonByAddonId = [];
-    foreach ($userAddonRows as $row) {
+    foreach ($userAddonStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $aid = (int)$row['addon_id'];
         if (!isset($userAddonByAddonId[$aid])) {
             $userAddonByAddonId[$aid] = $row;
         }
     }
 
-    $addonList = array_values(array_map(static function (array $addon) use ($userAddonByAddonId): array {
-        $aid = (int)$addon['id'];
-        $userRow = $userAddonByAddonId[$aid] ?? null;
-        return [
-            'addonSlug' => $addon['slug'],
-            'name' => $addon['name'],
-            'description' => $addon['description'],
-            'userStatus' => $userRow ? (string)$userRow['status'] : 'not_requested',
-            'requestedAt' => $userRow ? $userRow['requested_at'] : null,
-            'resolvedAt' => $userRow ? $userRow['resolved_at'] : null,
-        ];
-    }, $addons));
+    $addonList = array_values(array_map(
+        static function (array $addon) use ($userAddonByAddonId): array {
+            $aid = (int)$addon['id'];
+            $userRow = $userAddonByAddonId[$aid] ?? null;
+            $pence = (int)$addon['monthly_price_pence'];
+            $cur = (string)$addon['currency'];
+            return [
+                'addonKey' => $addon['addon_key'],
+                'name' => $addon['name'],
+                'description' => $addon['description'],
+                'pricePence' => $pence,
+                'currency' => $cur,
+                'priceDisplay' => $pence > 0 ? ssaMembershipPriceDisplay($pence, $cur) : 'Included',
+                'userStatus' => $userRow ? (string)$userRow['status'] : 'not_requested',
+                'requestedAt' => $userRow ? $userRow['requested_at'] : null,
+                'activatedAt' => $userRow ? $userRow['activated_at'] : null,
+            ];
+        },
+        $addons
+    ));
 
     // -------------------------------------------------------------------------
-    // Membership history (newest first)
+    // Membership history (all rows, newest first)
     // -------------------------------------------------------------------------
     $historyStmt = $pdo->prepare(
         'SELECT
+            m.id,
+            m.status,
             m.started_at,
-            m.ended_at,
-            m.notes,
-            p.slug AS plan_slug,
-            p.name AS plan_name
+            m.current_period_starts_at,
+            m.current_period_ends_at,
+            m.cancelled_at,
+            m.cancellation_effective_at,
+            m.price_snapshot_pence,
+            m.currency_snapshot,
+            m.plan_name_snapshot,
+            p.plan_key,
+            p.display_name
          FROM ssa_user_memberships m
          INNER JOIN ssa_membership_plans p ON p.id = m.plan_id
          WHERE m.uid = :uid
          ORDER BY m.started_at DESC, m.id DESC'
     );
     $historyStmt->execute(['uid' => $uid]);
-    $history = array_values(array_map(static fn (array $r): array => [
-        'planSlug' => $r['plan_slug'],
-        'planName' => $r['plan_name'],
-        'startedAt' => $r['started_at'],
-        'endedAt' => $r['ended_at'],
+    $membershipHistory = array_values(array_map(static fn (array $r): array => [
+        'id' => (int)$r['id'],
+        'planKey' => $r['plan_key'],
+        'planName' => $r['plan_name_snapshot'],
+        'displayName' => $r['display_name'],
+        'pricePence' => (int)$r['price_snapshot_pence'],
+        'currency' => $r['currency_snapshot'],
+        'status' => $r['status'],
+        'startedAt' => ssaMembershipDateOnly($r['started_at']),
+        'currentPeriodStart' => ssaMembershipDateOnly($r['current_period_starts_at']),
+        'currentPeriodEnd' => ssaMembershipDateOnly($r['current_period_ends_at']),
+        'cancelledAt' => ssaMembershipDateOnly($r['cancelled_at']),
+        'cancellationEffectiveAt' => ssaMembershipDateOnly($r['cancellation_effective_at']),
     ], $historyStmt->fetchAll(PDO::FETCH_ASSOC)));
 
     ssaApiJsonResponse(200, [
         'status' => 'ok',
-        'membership' => $membership,
+        'membershipStatus' => $membershipStatus,
+        'currentMembership' => $currentMembership,
         'availablePlans' => $availablePlans,
         'addons' => $addonList,
-        'history' => $history,
+        'membershipHistory' => $membershipHistory,
     ]);
 
 } catch (Throwable $exception) {

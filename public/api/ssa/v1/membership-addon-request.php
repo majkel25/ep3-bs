@@ -5,18 +5,18 @@ declare(strict_types=1);
 /**
  * POST /api/ssa/v1/membership-addon-request.php
  *
- * Allows the authenticated user to request an active membership add-on.
- * No payment or activation is performed — creates a 'requested' row for
- * admin review. The user can cancel an existing request by posting the same
- * addonSlug again when their current status is 'requested'.
+ * Allows the authenticated user to request a membership add-on.
+ * No payment or automatic activation — creates a 'requested' row for
+ * admin review. If the user already has an active or pending request for
+ * this add-on, returns the existing status without creating a duplicate.
  *
  * Request body (JSON):
- *   { "addonSlug": "match_recordings" }
+ *   { "addonKey": "match_recordings" }
  *
- * Idempotency:
- *   - If the user has a 'requested' row for this addon, cancel it (status → 'cancelled').
- *   - If the user has an 'approved' row, return 409 — already active.
- *   - Otherwise, insert a new 'requested' row.
+ * Status transitions:
+ *   - No row → inserts row with status 'requested'
+ *   - Existing status 'requested' or 'active' or 'cancel_pending' → returns existing status
+ *   - Existing status 'declined', 'cancelled', or 'expired' → inserts new 'requested' row
  *
  * Requires a valid Auth0 Bearer token for a linked booking account.
  */
@@ -57,26 +57,32 @@ if (!is_array($body)) {
     ]);
 }
 
-$addonSlug = isset($body['addonSlug']) ? trim((string)$body['addonSlug']) : '';
+$addonKey = isset($body['addonKey']) ? trim((string)$body['addonKey']) : '';
 
-if ($addonSlug === '') {
+if ($addonKey === '') {
     ssaApiJsonResponse(400, [
-        'error' => 'missing_addon_slug',
-        'message' => 'addonSlug is required.',
+        'error' => 'missing_addon_key',
+        'message' => 'addonKey is required.',
     ]);
 }
+
+// Terminal statuses — a new request is allowed after these.
+const SSA_ADDON_TERMINAL_STATUSES = ['declined', 'cancelled', 'expired'];
+
+// Non-terminal statuses — return existing status, do not duplicate.
+const SSA_ADDON_PENDING_STATUSES = ['requested', 'active', 'cancel_pending'];
 
 try {
     $pdo = ssaApiCreatePdo();
 
-    // Resolve uid.
-    $linkRow = $pdo->prepare(
+    // Resolve uid from Auth0 subject.
+    $linkStmt = $pdo->prepare(
         'SELECT uid FROM ssa_auth0_user_links
          WHERE auth0_sub = :auth0Sub AND revoked_at IS NULL
          LIMIT 1'
     );
-    $linkRow->execute(['auth0Sub' => $auth0Sub]);
-    $link = $linkRow->fetch(PDO::FETCH_ASSOC);
+    $linkStmt->execute(['auth0Sub' => $auth0Sub]);
+    $link = $linkStmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$link || (int)($link['uid'] ?? 0) <= 0) {
         ssaApiJsonResponse(403, [
@@ -87,14 +93,14 @@ try {
 
     $uid = (int)$link['uid'];
 
-    // Look up the addon.
-    $addonRow = $pdo->prepare(
-        'SELECT id, name FROM ssa_membership_addons
-         WHERE slug = :slug AND is_active = 1
+    // Look up the add-on by addon_key.
+    $addonStmt = $pdo->prepare(
+        'SELECT id, addon_key, name FROM ssa_membership_addons
+         WHERE addon_key = :addonKey AND is_active = 1
          LIMIT 1'
     );
-    $addonRow->execute(['slug' => $addonSlug]);
-    $addon = $addonRow->fetch(PDO::FETCH_ASSOC);
+    $addonStmt->execute(['addonKey' => $addonKey]);
+    $addon = $addonStmt->fetch(PDO::FETCH_ASSOC);
 
     if (!$addon) {
         ssaApiJsonResponse(404, [
@@ -105,46 +111,34 @@ try {
 
     $addonId = (int)$addon['id'];
 
-    // Check user's most recent row for this addon.
-    $existingRow = $pdo->prepare(
-        'SELECT id, status FROM ssa_user_membership_addons
+    // Find the user's most recent row for this add-on (regardless of status).
+    $existingStmt = $pdo->prepare(
+        'SELECT id, status, requested_at, activated_at
+         FROM ssa_user_membership_addons
          WHERE uid = :uid AND addon_id = :addonId
          ORDER BY requested_at DESC
          LIMIT 1'
     );
-    $existingRow->execute(['uid' => $uid, 'addonId' => $addonId]);
-    $existing = $existingRow->fetch(PDO::FETCH_ASSOC);
+    $existingStmt->execute(['uid' => $uid, 'addonId' => $addonId]);
+    $existing = $existingStmt->fetch(PDO::FETCH_ASSOC);
 
     if ($existing) {
         $existingStatus = (string)$existing['status'];
 
-        if ($existingStatus === 'approved') {
-            ssaApiJsonResponse(409, [
-                'error' => 'addon_already_active',
-                'message' => 'This add-on is already active on your account.',
-                'addonStatus' => 'approved',
-            ]);
-        }
-
-        if ($existingStatus === 'requested') {
-            // Toggle: cancel the pending request.
-            $pdo->prepare(
-                'UPDATE ssa_user_membership_addons
-                 SET status = :status, resolved_at = UTC_TIMESTAMP(), updated_at = UTC_TIMESTAMP()
-                 WHERE id = :id'
-            )->execute(['status' => 'cancelled', 'id' => (int)$existing['id']]);
-
+        if (in_array($existingStatus, SSA_ADDON_PENDING_STATUSES, true)) {
+            // Already in an active/pending state — return without creating a duplicate.
             ssaApiJsonResponse(200, [
                 'status' => 'ok',
-                'action' => 'cancelled',
-                'addonSlug' => $addonSlug,
-                'addonStatus' => 'cancelled',
-                'message' => 'Your add-on request has been cancelled.',
+                'action' => 'already_exists',
+                'addonKey' => $addonKey,
+                'addonStatus' => $existingStatus,
+                'message' => 'You already have a ' . $existingStatus . ' request for this add-on.',
             ]);
         }
+        // Terminal status — fall through to insert a new request row.
     }
 
-    // Insert new request.
+    // Insert new 'requested' row.
     $pdo->prepare(
         'INSERT INTO ssa_user_membership_addons
             (uid, addon_id, status, requested_at)
@@ -158,9 +152,9 @@ try {
     ssaApiJsonResponse(200, [
         'status' => 'ok',
         'action' => 'requested',
-        'addonSlug' => $addonSlug,
+        'addonKey' => $addonKey,
         'addonStatus' => 'requested',
-        'message' => 'Your add-on request has been submitted and is pending admin review.',
+        'message' => 'Your add-on request has been submitted and is pending review.',
     ]);
 
 } catch (Throwable $exception) {
