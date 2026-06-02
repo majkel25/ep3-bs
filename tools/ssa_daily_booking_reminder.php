@@ -252,7 +252,7 @@ function ssaDailyBookingReminderBody(array $bookings): string
     $timeStart = ssaApiNormaliseTimeValue($first['time_start'] ?? null) ?? 'time TBC';
     $timeEnd = ssaApiNormaliseTimeValue($first['time_end'] ?? null) ?? 'time TBC';
 
-    $body = 'You have table booked today, ' . $tableName . ' - ' . $timeStart . ' to ' . $timeEnd;
+    $body = 'You have ' . $tableName . ' booked today at ' . $timeStart . ' to ' . $timeEnd;
     $extraCount = count($bookings) - 1;
 
     if ($extraCount > 0) {
