@@ -195,22 +195,21 @@ try {
                     :environment,
                     :appVersion,
                     :deviceName,
-                    TRUE,
+                    1,
                     NOW(),
                     NOW(),
                     NOW(),
                     NULL
                 )
-             ON CONFLICT (device_token_hash)
-             DO UPDATE SET
-                    auth0_sub = EXCLUDED.auth0_sub,
-                    uid = EXCLUDED.uid,
-                    device_token = EXCLUDED.device_token,
-                    platform = EXCLUDED.platform,
-                    environment = EXCLUDED.environment,
-                    app_version = EXCLUDED.app_version,
-                    device_name = EXCLUDED.device_name,
-                    enabled = TRUE,
+             ON DUPLICATE KEY UPDATE
+                    auth0_sub = VALUES(auth0_sub),
+                    uid = VALUES(uid),
+                    device_token = VALUES(device_token),
+                    platform = VALUES(platform),
+                    environment = VALUES(environment),
+                    app_version = VALUES(app_version),
+                    device_name = VALUES(device_name),
+                    enabled = 1,
                     updated_at = NOW(),
                     last_seen_at = NOW(),
                     disabled_at = NULL'
