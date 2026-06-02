@@ -212,7 +212,6 @@ function ssaDailyBookingReminderFetchTokens(PDO $pdo, array $uids): array
             t.last_seen_at
         FROM ssa_push_tokens t
         INNER JOIN ssa_auth0_user_links l ON l.uid = t.uid
-            AND l.auth0_sub = t.auth0_sub
             AND l.revoked_at IS NULL
         WHERE t.enabled = 1
           AND t.platform = :platform
