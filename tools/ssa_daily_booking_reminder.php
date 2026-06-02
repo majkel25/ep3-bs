@@ -111,12 +111,14 @@ function ssaDailyBookingReminderEnsureLocalTimeGuard(DateTimeImmutable $now, boo
 
 function ssaDailyBookingReminderEnsureLogTable(PDO $pdo): void
 {
+    // Fresh install: create with booking_signature_hash and the new unique key.
     $pdo->exec(<<<SQL
 CREATE TABLE IF NOT EXISTS ssa_push_notification_log (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     uid INT UNSIGNED NOT NULL,
     rule_key VARCHAR(96) NOT NULL,
     notification_date DATE NOT NULL,
+    booking_signature_hash CHAR(64) NULL,
     event_type VARCHAR(96) NOT NULL,
     payload_json TEXT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'sending',
@@ -128,11 +130,53 @@ CREATE TABLE IF NOT EXISTS ssa_push_notification_log (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uq_ssa_push_notification_log_rule_date (uid, rule_key, notification_date),
+    UNIQUE KEY uq_ssa_push_log_rule_date_sig (uid, rule_key, notification_date, booking_signature_hash),
     KEY idx_ssa_push_notification_log_rule_key (rule_key),
     KEY idx_ssa_push_notification_log_notification_date (notification_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 SQL);
+
+    // Migration A: add booking_signature_hash column if missing (existing table).
+    $colExists = (int)$pdo->query(
+        "SELECT COUNT(*) FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'ssa_push_notification_log'
+           AND COLUMN_NAME = 'booking_signature_hash'"
+    )->fetchColumn();
+    if ($colExists === 0) {
+        $pdo->exec(
+            'ALTER TABLE ssa_push_notification_log
+             ADD COLUMN booking_signature_hash CHAR(64) NULL AFTER notification_date'
+        );
+    }
+
+    // Migration B: drop old narrow unique key (uid, rule_key, notification_date) if it exists.
+    $oldKeyExists = (int)$pdo->query(
+        "SELECT COUNT(*) FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'ssa_push_notification_log'
+           AND INDEX_NAME = 'uq_ssa_push_notification_log_rule_date'"
+    )->fetchColumn();
+    if ($oldKeyExists > 0) {
+        $pdo->exec(
+            'ALTER TABLE ssa_push_notification_log
+             DROP INDEX uq_ssa_push_notification_log_rule_date'
+        );
+    }
+
+    // Migration C: add new wide unique key if missing.
+    $newKeyExists = (int)$pdo->query(
+        "SELECT COUNT(*) FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'ssa_push_notification_log'
+           AND INDEX_NAME = 'uq_ssa_push_log_rule_date_sig'"
+    )->fetchColumn();
+    if ($newKeyExists === 0) {
+        $pdo->exec(
+            'ALTER TABLE ssa_push_notification_log
+             ADD UNIQUE KEY uq_ssa_push_log_rule_date_sig (uid, rule_key, notification_date, booking_signature_hash)'
+        );
+    }
 }
 
 function ssaDailyBookingReminderFetchBookings(PDO $pdo, string $date, ?int $uid): array
@@ -233,6 +277,34 @@ function ssaDailyBookingReminderFetchTokens(PDO $pdo, array $uids): array
     return $tokensByUid;
 }
 
+function ssaDailyBookingReminderNormaliseTableName(string $raw): string
+{
+    $raw = trim($raw);
+    if ($raw === '') {
+        return 'Table';
+    }
+    if (stripos($raw, 'table') === 0) {
+        return $raw;
+    }
+    return 'Table ' . $raw;
+}
+
+function ssaDailyBookingReminderSignature(array $bookings): string
+{
+    $parts = [];
+    foreach ($bookings as $b) {
+        $parts[] = implode(':', [
+            (int)($b['bid'] ?? 0),
+            (int)($b['rid'] ?? 0),
+            trim((string)($b['table_name'] ?? '')),
+            trim((string)($b['time_start'] ?? '')),
+            trim((string)($b['time_end'] ?? '')),
+        ]);
+    }
+    sort($parts);
+    return hash('sha256', implode('|', $parts));
+}
+
 function ssaDailyBookingReminderPreferenceAllows(PDO $pdo, int $uid, string $preferenceKey): bool
 {
     // iOS preferences are currently local-only. When backend preference sync is
@@ -244,15 +316,12 @@ function ssaDailyBookingReminderPreferenceAllows(PDO $pdo, int $uid, string $pre
 function ssaDailyBookingReminderBody(array $bookings): string
 {
     $first = $bookings[0] ?? [];
-    $tableName = trim((string)($first['table_name'] ?? 'Table'));
-    if ($tableName === '') {
-        $tableName = 'Table';
-    }
+    $tableName = ssaDailyBookingReminderNormaliseTableName((string)($first['table_name'] ?? ''));
 
     $timeStart = ssaApiNormaliseTimeValue($first['time_start'] ?? null) ?? 'time TBC';
     $timeEnd = ssaApiNormaliseTimeValue($first['time_end'] ?? null) ?? 'time TBC';
 
-    $body = 'You have ' . $tableName . ' booked today at ' . $timeStart . ' to ' . $timeEnd;
+    $body = 'You have table booked today, ' . $tableName . ' - ' . $timeStart . ' to ' . $timeEnd;
     $extraCount = count($bookings) - 1;
 
     if ($extraCount > 0) {
@@ -283,7 +352,7 @@ function ssaDailyBookingReminderPayload(array $bookings, string $date): array
     return $payload;
 }
 
-function ssaDailyBookingReminderReserveLog(PDO $pdo, int $uid, string $date, array $payload): ?int
+function ssaDailyBookingReminderReserveLog(PDO $pdo, int $uid, string $date, array $payload, string $signatureHash): ?int
 {
     $jsonPayload = json_encode($payload, JSON_UNESCAPED_SLASHES);
     if ($jsonPayload === false) {
@@ -292,15 +361,16 @@ function ssaDailyBookingReminderReserveLog(PDO $pdo, int $uid, string $date, arr
 
     $statement = $pdo->prepare(
         'INSERT IGNORE INTO ssa_push_notification_log
-            (uid, rule_key, notification_date, event_type, payload_json, status, created_at, updated_at)
+            (uid, rule_key, notification_date, booking_signature_hash, event_type, payload_json, status, created_at, updated_at)
          VALUES
-            (:uid, :ruleKey, :notificationDate, :eventType, :payloadJson, :status, UTC_TIMESTAMP(), UTC_TIMESTAMP())'
+            (:uid, :ruleKey, :notificationDate, :signatureHash, :eventType, :payloadJson, :status, UTC_TIMESTAMP(), UTC_TIMESTAMP())'
     );
 
     $statement->execute([
         'uid' => $uid,
         'ruleKey' => SSA_DAILY_BOOKING_REMINDER_RULE_KEY,
         'notificationDate' => $date,
+        'signatureHash' => $signatureHash,
         'eventType' => SSA_DAILY_BOOKING_REMINDER_EVENT_TYPE,
         'payloadJson' => $jsonPayload,
         'status' => 'sending',
@@ -396,6 +466,7 @@ try {
         $tokens = $tokensByUid[$uid] ?? [];
         $payload = ssaDailyBookingReminderPayload($bookings, $date);
         $body = ssaDailyBookingReminderBody($bookings);
+        $signatureHash = ssaDailyBookingReminderSignature($bookings);
         $preferenceAllows = ssaDailyBookingReminderPreferenceAllows($pdo, $uid, SSA_DAILY_BOOKING_REMINDER_PREFERENCE_KEY);
 
         $item = [
@@ -405,6 +476,7 @@ try {
             'preferenceAllows' => $preferenceAllows,
             'title' => SSA_DAILY_BOOKING_REMINDER_TITLE,
             'body' => $body,
+            'bookingSignatureHash' => $signatureHash,
             'payload' => $payload,
             'bookings' => ssaDailyBookingReminderSummariseBookings($bookings),
             'sent' => false,
@@ -429,7 +501,7 @@ try {
             continue;
         }
 
-        $logId = ssaDailyBookingReminderReserveLog($pdo, $uid, $date, $payload);
+        $logId = ssaDailyBookingReminderReserveLog($pdo, $uid, $date, $payload, $signatureHash);
         if ($logId === null) {
             $item['skippedReason'] = 'already_sent_or_reserved_for_rule_date';
             $summary['processed'][] = $item;
