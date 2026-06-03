@@ -16,6 +16,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/_membership_request_helpers.php';
+require_once __DIR__ . '/_user_notifications.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     ssaApiJsonResponse(405, [
@@ -63,6 +64,8 @@ try {
 
     $membershipId = (int)$activeMembership['id'];
 
+    ssaUserNotificationsEnsureTable($pdo);
+
     $pdo->beginTransaction();
 
     $existing = ssaMembershipPendingAdminRequest(
@@ -77,6 +80,17 @@ try {
         $requestId = (int)$existing['id'];
         $action = 'already_exists';
     } else {
+        $payload = [
+            'currentMembershipId' => $membershipId,
+            'currentPlanId' => (int)$activeMembership['plan_id'],
+            'currentPlanKey' => (string)$activeMembership['plan_key'],
+            'currentPlanName' => (string)($activeMembership['display_name'] ?: $activeMembership['name']),
+            'currentPeriodEnd' => $activeMembership['current_period_ends_at'],
+            'cancellationNoticeDeadline' => $activeMembership['cancellation_notice_deadline_at'],
+            'reason' => $reason !== '' ? $reason : null,
+            'source' => 'ios_app',
+        ];
+
         $requestId = ssaMembershipCreateAdminRequest(
             $pdo,
             $uid,
@@ -84,17 +98,23 @@ try {
             'membership_cancellation',
             (string)$activeMembership['plan_key'],
             $membershipId,
-            [
-                'currentMembershipId' => $membershipId,
-                'currentPlanId' => (int)$activeMembership['plan_id'],
-                'currentPlanKey' => (string)$activeMembership['plan_key'],
-                'currentPlanName' => (string)($activeMembership['display_name'] ?: $activeMembership['name']),
-                'currentPeriodEnd' => $activeMembership['current_period_ends_at'],
-                'cancellationNoticeDeadline' => $activeMembership['cancellation_notice_deadline_at'],
-                'reason' => $reason !== '' ? $reason : null,
-                'source' => 'ios_app',
-            ]
+            $payload
         );
+
+        ssaUserNotificationsCreate(
+            $pdo,
+            $uid,
+            'membership_cancellation_request_submitted',
+            'Surrey Snooker Academy',
+            'Your membership cancellation request has been submitted for approval.',
+            'membership',
+            (string)$requestId,
+            array_merge($payload, [
+                'adminRequestId' => $requestId,
+                'requestType' => 'membership_cancellation',
+            ])
+        );
+
         $action = 'requested';
     }
 

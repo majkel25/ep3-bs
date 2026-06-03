@@ -16,6 +16,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/_membership_request_helpers.php';
+require_once __DIR__ . '/_user_notifications.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     ssaApiJsonResponse(405, [
@@ -94,6 +95,8 @@ try {
 
     $targetPlanId = (int)$targetPlan['id'];
 
+    ssaUserNotificationsEnsureTable($pdo);
+
     $pdo->beginTransaction();
 
     $existing = ssaMembershipPendingAdminRequest(
@@ -108,6 +111,19 @@ try {
         $requestId = (int)$existing['id'];
         $action = 'already_exists';
     } else {
+        $payload = [
+            'currentMembershipId' => (int)$activeMembership['id'],
+            'currentPlanId' => (int)$activeMembership['plan_id'],
+            'currentPlanKey' => (string)$activeMembership['plan_key'],
+            'currentPlanName' => (string)($activeMembership['display_name'] ?: $activeMembership['name']),
+            'targetPlanId' => $targetPlanId,
+            'targetPlanKey' => (string)$targetPlan['plan_key'],
+            'targetPlanName' => (string)($targetPlan['display_name'] ?: $targetPlan['name']),
+            'targetPricePence' => (int)$targetPlan['monthly_price_pence'],
+            'targetCurrency' => (string)$targetPlan['currency'],
+            'source' => 'ios_app',
+        ];
+
         $requestId = ssaMembershipCreateAdminRequest(
             $pdo,
             $uid,
@@ -115,19 +131,23 @@ try {
             'membership_change',
             (string)$targetPlan['plan_key'],
             $targetPlanId,
-            [
-                'currentMembershipId' => (int)$activeMembership['id'],
-                'currentPlanId' => (int)$activeMembership['plan_id'],
-                'currentPlanKey' => (string)$activeMembership['plan_key'],
-                'currentPlanName' => (string)($activeMembership['display_name'] ?: $activeMembership['name']),
-                'targetPlanId' => $targetPlanId,
-                'targetPlanKey' => (string)$targetPlan['plan_key'],
-                'targetPlanName' => (string)($targetPlan['display_name'] ?: $targetPlan['name']),
-                'targetPricePence' => (int)$targetPlan['monthly_price_pence'],
-                'targetCurrency' => (string)$targetPlan['currency'],
-                'source' => 'ios_app',
-            ]
+            $payload
         );
+
+        ssaUserNotificationsCreate(
+            $pdo,
+            $uid,
+            'membership_change_request_submitted',
+            'Surrey Snooker Academy',
+            'Your membership change request has been submitted for approval.',
+            'membership',
+            (string)$requestId,
+            array_merge($payload, [
+                'adminRequestId' => $requestId,
+                'requestType' => 'membership_change',
+            ])
+        );
+
         $action = 'requested';
     }
 

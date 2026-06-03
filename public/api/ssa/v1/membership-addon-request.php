@@ -17,6 +17,7 @@ declare(strict_types=1);
  */
 
 require_once __DIR__ . '/_membership_request_helpers.php';
+require_once __DIR__ . '/_user_notifications.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     ssaApiJsonResponse(405, [
@@ -66,6 +67,8 @@ try {
 
     $addonId = (int)$addon['id'];
     $addonName = (string)$addon['name'];
+
+    ssaUserNotificationsEnsureTable($pdo);
 
     $pdo->beginTransaction();
 
@@ -119,9 +122,10 @@ try {
             $addonId
         );
 
-        $adminRequestId = $pendingAdminRequest
-            ? (int)$pendingAdminRequest['id']
-            : ssaMembershipCreateAdminRequest(
+        if ($pendingAdminRequest) {
+            $adminRequestId = (int)$pendingAdminRequest['id'];
+        } else {
+            $adminRequestId = ssaMembershipCreateAdminRequest(
                 $pdo,
                 $uid,
                 $auth0Sub,
@@ -135,6 +139,26 @@ try {
                     'source' => 'ios_app',
                 ]
             );
+
+            ssaUserNotificationsCreate(
+                $pdo,
+                $uid,
+                'membership_addon_request_submitted',
+                'Surrey Snooker Academy',
+                $addonKey === 'match_recordings'
+                    ? 'Your Match Recordings add-on request has been submitted for approval.'
+                    : 'Your membership add-on request has been submitted for approval.',
+                'membership',
+                (string)$adminRequestId,
+                [
+                    'adminRequestId' => $adminRequestId,
+                    'requestType' => 'addon_request',
+                    'addonKey' => $addonKey,
+                    'addonId' => $addonId,
+                    'addonName' => $addonName,
+                ]
+            );
+        }
     }
 
     $pdo->commit();
