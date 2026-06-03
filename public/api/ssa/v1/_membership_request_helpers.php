@@ -58,14 +58,25 @@ function ssaMembershipReadJsonBody(): array
     return $body;
 }
 
+function ssaMembershipJson(?array $payload): ?string
+{
+    if ($payload === null) {
+        return null;
+    }
+
+    $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES);
+    return $encoded === false ? null : $encoded;
+}
+
 function ssaMembershipPendingAdminRequest(
     PDO $pdo,
     int $uid,
     string $requestType,
-    ?string $targetKey,
-    ?int $targetId
+    ?string $targetKey = null,
+    ?int $targetId = null,
+    bool $matchTarget = true
 ): ?array {
-    $sql = 'SELECT id, status, requested_at
+    $sql = 'SELECT id, uid, auth0_sub, request_type, status, target_key, target_id, payload_json, requested_at
             FROM ssa_admin_requests
             WHERE uid = :uid
               AND request_type = :requestType
@@ -76,18 +87,20 @@ function ssaMembershipPendingAdminRequest(
         'status' => 'pending',
     ];
 
-    if ($targetKey === null) {
-        $sql .= ' AND target_key IS NULL';
-    } else {
-        $sql .= ' AND target_key = :targetKey';
-        $params['targetKey'] = $targetKey;
-    }
+    if ($matchTarget) {
+        if ($targetKey === null) {
+            $sql .= ' AND target_key IS NULL';
+        } else {
+            $sql .= ' AND target_key = :targetKey';
+            $params['targetKey'] = $targetKey;
+        }
 
-    if ($targetId === null) {
-        $sql .= ' AND target_id IS NULL';
-    } else {
-        $sql .= ' AND target_id = :targetId';
-        $params['targetId'] = $targetId;
+        if ($targetId === null) {
+            $sql .= ' AND target_id IS NULL';
+        } else {
+            $sql .= ' AND target_id = :targetId';
+            $params['targetId'] = $targetId;
+        }
     }
 
     $sql .= ' ORDER BY requested_at DESC, id DESC LIMIT 1';
@@ -108,15 +121,7 @@ function ssaMembershipCreateAdminRequest(
     ?int $targetId,
     array $payload
 ): int {
-    $existing = ssaMembershipPendingAdminRequest($pdo, $uid, $requestType, $targetKey, $targetId);
-    if ($existing) {
-        return (int)$existing['id'];
-    }
-
-    $payloadJson = json_encode($payload, JSON_UNESCAPED_SLASHES);
-    if ($payloadJson === false) {
-        $payloadJson = null;
-    }
+    $payloadJson = ssaMembershipJson($payload);
 
     $stmt = $pdo->prepare(
         'INSERT INTO ssa_admin_requests
@@ -135,4 +140,76 @@ function ssaMembershipCreateAdminRequest(
     ]);
 
     return (int)$pdo->lastInsertId();
+}
+
+function ssaMembershipUpdatePendingAdminRequest(
+    PDO $pdo,
+    int $requestId,
+    ?string $targetKey,
+    ?int $targetId,
+    array $payload
+): void {
+    $stmt = $pdo->prepare(
+        'UPDATE ssa_admin_requests
+         SET target_key = :targetKey,
+             target_id = :targetId,
+             payload_json = :payloadJson
+         WHERE id = :id AND status = :status'
+    );
+    $stmt->execute([
+        'id' => $requestId,
+        'status' => 'pending',
+        'targetKey' => $targetKey,
+        'targetId' => $targetId,
+        'payloadJson' => ssaMembershipJson($payload),
+    ]);
+}
+
+function ssaMembershipCancelPendingAdminRequest(PDO $pdo, int $requestId): void
+{
+    $stmt = $pdo->prepare(
+        'UPDATE ssa_admin_requests
+         SET status = :cancelled
+         WHERE id = :id AND status = :pending'
+    );
+    $stmt->execute([
+        'id' => $requestId,
+        'cancelled' => 'cancelled',
+        'pending' => 'pending',
+    ]);
+}
+
+function ssaMembershipRequestForApi(?array $request, ?array $extra = null): ?array
+{
+    if (!$request) {
+        return null;
+    }
+
+    $payload = [];
+    if (isset($request['payload_json']) && $request['payload_json'] !== null && $request['payload_json'] !== '') {
+        $decoded = json_decode((string)$request['payload_json'], true);
+        if (is_array($decoded)) {
+            $payload = $decoded;
+        }
+    }
+
+    $result = [
+        'id' => (int)$request['id'],
+        'status' => (string)$request['status'],
+        'requestedAt' => $request['requested_at'] ?? null,
+    ];
+
+    foreach ($payload as $key => $value) {
+        if (!array_key_exists($key, $result)) {
+            $result[$key] = $value;
+        }
+    }
+
+    if ($extra) {
+        foreach ($extra as $key => $value) {
+            $result[$key] = $value;
+        }
+    }
+
+    return $result;
 }

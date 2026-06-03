@@ -47,6 +47,7 @@ try {
                 message,
                 screen,
                 entity_id,
+                payload_json,
                 read_at,
                 created_at,
                 DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:%sZ') AS created_at_iso,

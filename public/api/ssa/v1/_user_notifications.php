@@ -27,6 +27,16 @@ function ssaUserNotificationsEnsureTable(PDO $pdo): void
     );
 }
 
+function ssaUserNotificationsPayloadJson(?array $payload): ?string
+{
+    if ($payload === null) {
+        return null;
+    }
+
+    $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES);
+    return $encoded === false ? null : $encoded;
+}
+
 function ssaUserNotificationsCreate(
     PDO $pdo,
     int $uid,
@@ -39,12 +49,6 @@ function ssaUserNotificationsCreate(
 ): int {
     if (!$pdo->inTransaction()) {
         ssaUserNotificationsEnsureTable($pdo);
-    }
-
-    $payloadJson = null;
-    if ($payload !== null) {
-        $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES);
-        $payloadJson = $encoded === false ? null : $encoded;
     }
 
     $stmt = $pdo->prepare(
@@ -60,10 +64,91 @@ function ssaUserNotificationsCreate(
         'message' => $message,
         'screen' => $screen,
         'entityId' => $entityId,
-        'payloadJson' => $payloadJson,
+        'payloadJson' => ssaUserNotificationsPayloadJson($payload),
     ]);
 
     return (int)$pdo->lastInsertId();
+}
+
+function ssaUserNotificationsLatestForEntity(
+    PDO $pdo,
+    int $uid,
+    string $type,
+    string $entityId
+): ?array {
+    $stmt = $pdo->prepare(
+        'SELECT id, uid, type, title, message, screen, entity_id, payload_json, read_at, created_at
+         FROM ssa_user_notifications
+         WHERE uid = :uid AND type = :type AND entity_id = :entityId
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1'
+    );
+    $stmt->execute([
+        'uid' => $uid,
+        'type' => $type,
+        'entityId' => $entityId,
+    ]);
+
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    return $row ?: null;
+}
+
+function ssaUserNotificationsUpdate(
+    PDO $pdo,
+    int $notificationId,
+    string $message,
+    ?array $payload = null,
+    bool $markRead = false
+): void {
+    $sql = 'UPDATE ssa_user_notifications
+            SET message = :message,
+                payload_json = :payloadJson';
+    if ($markRead) {
+        $sql .= ', read_at = COALESCE(read_at, UTC_TIMESTAMP())';
+    }
+    $sql .= ' WHERE id = :id';
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([
+        'id' => $notificationId,
+        'message' => $message,
+        'payloadJson' => ssaUserNotificationsPayloadJson($payload),
+    ]);
+}
+
+function ssaUserNotificationsCreateOrUpdateForRequest(
+    PDO $pdo,
+    int $uid,
+    string $type,
+    int $adminRequestId,
+    string $message,
+    array $payload,
+    bool $createNewIfMissing = true,
+    bool $markReadOnUpdate = false
+): int {
+    $entityId = (string)$adminRequestId;
+    $existing = ssaUserNotificationsLatestForEntity($pdo, $uid, $type, $entityId);
+
+    if ($existing) {
+        $notificationId = (int)$existing['id'];
+        ssaUserNotificationsUpdate($pdo, $notificationId, $message, $payload, $markReadOnUpdate);
+        return $notificationId;
+    }
+
+    if (!$createNewIfMissing) {
+        return 0;
+    }
+
+    return ssaUserNotificationsCreate(
+        $pdo,
+        $uid,
+        $type,
+        'Surrey Snooker Academy',
+        $message,
+        'membership',
+        $entityId,
+        $payload
+    );
 }
 
 function ssaUserNotificationsRowForApi(array $row): array
@@ -74,6 +159,12 @@ function ssaUserNotificationsRowForApi(array $row): array
     $readAt = isset($row['read_at_iso']) && $row['read_at_iso'] !== null
         ? (string)$row['read_at_iso']
         : null;
+
+    $payload = null;
+    if (isset($row['payload_json']) && $row['payload_json'] !== null && $row['payload_json'] !== '') {
+        $decoded = json_decode((string)$row['payload_json'], true);
+        $payload = is_array($decoded) ? $decoded : null;
+    }
 
     return [
         'id' => (string)$row['id'],
@@ -87,5 +178,6 @@ function ssaUserNotificationsRowForApi(array $row): array
         'entity_id' => $row['entity_id'] !== null ? (string)$row['entity_id'] : null,
         'action_type' => $row['screen'] !== null ? (string)$row['screen'] : null,
         'action_url' => $row['screen'] !== null ? (string)$row['screen'] : null,
+        'payload' => $payload,
     ];
 }

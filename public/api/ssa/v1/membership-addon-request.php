@@ -5,15 +5,12 @@ declare(strict_types=1);
 /**
  * POST /api/ssa/v1/membership-addon-request.php
  *
- * Allows the authenticated user to request a membership add-on.
- * No payment or automatic activation — creates/keeps the user add-on row in
- * requested state and creates a pending ssa_admin_requests approval request.
- * Duplicate pending requests are not created.
+ * Allows the authenticated user to request or rescind a membership add-on
+ * approval request. No payment or automatic activation happens here.
  *
  * Request body (JSON):
- *   { "addonKey": "match_recordings" }
- *
- * Requires a valid Auth0 Bearer token for a linked booking account.
+ *   { "addonKey": "match_recordings", "action": "request" }
+ *   { "addonKey": "match_recordings", "action": "rescind" }
  */
 
 require_once __DIR__ . '/_membership_request_helpers.php';
@@ -29,6 +26,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $claims = ssaApiRequireAuth0Claims();
 $body = ssaMembershipReadJsonBody();
 $addonKey = isset($body['addonKey']) ? trim((string)$body['addonKey']) : '';
+$actionInput = isset($body['action']) ? trim((string)$body['action']) : 'request';
+$actionInput = $actionInput === '' ? 'request' : $actionInput;
 
 if ($addonKey === '') {
     ssaApiJsonResponse(400, [
@@ -37,10 +36,14 @@ if ($addonKey === '') {
     ]);
 }
 
-// Terminal statuses — a new request is allowed after these.
-const SSA_ADDON_TERMINAL_STATUSES = ['declined', 'cancelled', 'expired'];
+if (!in_array($actionInput, ['request', 'rescind', 'cancel'], true)) {
+    ssaApiJsonResponse(400, [
+        'error' => 'invalid_action',
+        'message' => 'action must be request or rescind.',
+    ]);
+}
 
-// Non-terminal statuses — return existing status, do not duplicate user add-on rows.
+const SSA_ADDON_TERMINAL_STATUSES = ['declined', 'cancelled', 'expired'];
 const SSA_ADDON_NON_TERMINAL_STATUSES = ['requested', 'active', 'cancel_pending'];
 
 try {
@@ -49,7 +52,6 @@ try {
     $uid = $linked['uid'];
     $auth0Sub = $linked['auth0Sub'];
 
-    // Look up the add-on by addon_key.
     $addonStmt = $pdo->prepare(
         'SELECT id, addon_key, name FROM ssa_membership_addons
          WHERE addon_key = :addonKey AND is_active = 1
@@ -67,17 +69,82 @@ try {
 
     $addonId = (int)$addon['id'];
     $addonName = (string)$addon['name'];
-
     ssaUserNotificationsEnsureTable($pdo);
+
+    if ($actionInput === 'rescind' || $actionInput === 'cancel') {
+        $pdo->beginTransaction();
+
+        $existing = ssaMembershipPendingAdminRequest($pdo, $uid, 'addon_request', $addonKey, $addonId);
+        if (!$existing) {
+            $pdo->commit();
+            ssaApiJsonResponse(200, [
+                'status' => 'ok',
+                'action' => 'none_pending',
+                'requestType' => 'addon_request',
+                'requestStatus' => 'none',
+                'addonKey' => $addonKey,
+                'addonStatus' => 'not_requested',
+                'message' => 'No pending add-on request was found.',
+            ]);
+        }
+
+        $requestId = (int)$existing['id'];
+        ssaMembershipCancelPendingAdminRequest($pdo, $requestId);
+
+        $pdo->prepare(
+            'UPDATE ssa_user_membership_addons
+             SET status = :cancelled
+             WHERE uid = :uid AND addon_id = :addonId AND status = :requested'
+        )->execute([
+            'uid' => $uid,
+            'addonId' => $addonId,
+            'requested' => 'requested',
+            'cancelled' => 'cancelled',
+        ]);
+
+        $cancelledMessage = $addonKey === 'match_recordings'
+            ? 'Match Recordings add-on request cancelled by member.'
+            : 'Membership add-on request cancelled by member.';
+
+        ssaUserNotificationsCreateOrUpdateForRequest(
+            $pdo,
+            $uid,
+            'membership_addon_request_submitted',
+            $requestId,
+            $cancelledMessage,
+            [
+                'adminRequestId' => $requestId,
+                'requestType' => 'addon_request',
+                'requestStatus' => 'cancelled',
+                'addonKey' => $addonKey,
+                'addonId' => $addonId,
+                'addonName' => $addonName,
+            ],
+            false,
+            true
+        );
+
+        $pdo->commit();
+
+        ssaApiJsonResponse(200, [
+            'status' => 'ok',
+            'action' => 'rescinded',
+            'requestId' => $requestId,
+            'requestType' => 'addon_request',
+            'requestStatus' => 'cancelled',
+            'addonKey' => $addonKey,
+            'addonStatus' => 'not_requested',
+            'message' => $cancelledMessage,
+        ]);
+    }
 
     $pdo->beginTransaction();
 
-    // Find the user's most recent row for this add-on (regardless of status).
     $existingStmt = $pdo->prepare(
         'SELECT id, status, requested_at, activated_at
          FROM ssa_user_membership_addons
          WHERE uid = :uid AND addon_id = :addonId
-         ORDER BY requested_at DESC
+         ORDER BY requested_at DESC, id DESC
          LIMIT 1'
     );
     $existingStmt->execute(['uid' => $uid, 'addonId' => $addonId]);
@@ -88,12 +155,10 @@ try {
 
     if ($existing) {
         $existingStatus = (string)$existing['status'];
-
         if (in_array($existingStatus, SSA_ADDON_NON_TERMINAL_STATUSES, true)) {
             $addonStatus = $existingStatus;
             $action = 'already_exists';
         }
-        // Terminal status — insert a fresh requested row below.
     }
 
     if (!$existing || in_array((string)$existing['status'], SSA_ADDON_TERMINAL_STATUSES, true)) {
@@ -106,21 +171,14 @@ try {
             'addonId' => $addonId,
             'status' => 'requested',
         ]);
+        $addonStatus = 'requested';
+        $action = 'requested';
     }
 
     $adminRequestId = null;
 
-    // Ensure the admin approval queue has exactly one pending request for a requested add-on.
-    // Active/cancel_pending add-ons are already past the user-request step and are returned
-    // idempotently without creating a fresh approval request.
     if ($addonStatus === 'requested') {
-        $pendingAdminRequest = ssaMembershipPendingAdminRequest(
-            $pdo,
-            $uid,
-            'addon_request',
-            $addonKey,
-            $addonId
-        );
+        $pendingAdminRequest = ssaMembershipPendingAdminRequest($pdo, $uid, 'addon_request', $addonKey, $addonId);
 
         if ($pendingAdminRequest) {
             $adminRequestId = (int)$pendingAdminRequest['id'];
@@ -139,26 +197,25 @@ try {
                     'source' => 'ios_app',
                 ]
             );
-
-            ssaUserNotificationsCreate(
-                $pdo,
-                $uid,
-                'membership_addon_request_submitted',
-                'Surrey Snooker Academy',
-                $addonKey === 'match_recordings'
-                    ? 'Your Match Recordings add-on request has been submitted for approval.'
-                    : 'Your membership add-on request has been submitted for approval.',
-                'membership',
-                (string)$adminRequestId,
-                [
-                    'adminRequestId' => $adminRequestId,
-                    'requestType' => 'addon_request',
-                    'addonKey' => $addonKey,
-                    'addonId' => $addonId,
-                    'addonName' => $addonName,
-                ]
-            );
         }
+
+        ssaUserNotificationsCreateOrUpdateForRequest(
+            $pdo,
+            $uid,
+            'membership_addon_request_submitted',
+            $adminRequestId,
+            $addonKey === 'match_recordings'
+                ? 'Match Recordings add-on requested.'
+                : $addonName . ' add-on requested.',
+            [
+                'adminRequestId' => $adminRequestId,
+                'requestType' => 'addon_request',
+                'requestStatus' => 'pending',
+                'addonKey' => $addonKey,
+                'addonId' => $addonId,
+                'addonName' => $addonName,
+            ]
+        );
     }
 
     $pdo->commit();
@@ -167,11 +224,12 @@ try {
         'status' => 'ok',
         'action' => $action,
         'requestId' => $adminRequestId,
+        'requestType' => 'addon_request',
         'requestStatus' => $addonStatus === 'requested' ? 'pending' : $addonStatus,
         'addonKey' => $addonKey,
         'addonStatus' => $addonStatus,
-        'message' => $action === 'already_exists'
-            ? 'You already have a pending or active request for this add-on.'
+        'message' => $addonKey === 'match_recordings'
+            ? 'Match Recordings add-on requested.'
             : 'Your add-on request has been submitted and is pending review.',
     ]);
 

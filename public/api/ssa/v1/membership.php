@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_auth0.php';
 require_once __DIR__ . '/_db.php';
+require_once __DIR__ . '/_membership_request_helpers.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     ssaApiJsonResponse(405, [
@@ -272,6 +273,101 @@ try {
     ));
 
     // -------------------------------------------------------------------------
+    // Pending admin requests: backend source of truth for in-app lifecycle state
+    // -------------------------------------------------------------------------
+    $pendingChangeStmt = $pdo->prepare(
+        'SELECT
+            r.id,
+            r.status,
+            r.target_key,
+            r.target_id,
+            r.payload_json,
+            r.requested_at,
+            p.plan_key,
+            p.name AS plan_name,
+            p.display_name AS plan_display_name
+         FROM ssa_admin_requests r
+         LEFT JOIN ssa_membership_plans p ON p.id = r.target_id
+         WHERE r.uid = :uid
+           AND r.request_type = :requestType
+           AND r.status = :status
+         ORDER BY r.requested_at DESC, r.id DESC
+         LIMIT 1'
+    );
+    $pendingChangeStmt->execute([
+        'uid' => $uid,
+        'requestType' => 'membership_change',
+        'status' => 'pending',
+    ]);
+    $pendingChangeRow = $pendingChangeStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    $pendingCancellationStmt = $pdo->prepare(
+        'SELECT id, status, target_key, target_id, payload_json, requested_at
+         FROM ssa_admin_requests
+         WHERE uid = :uid
+           AND request_type = :requestType
+           AND status = :status
+         ORDER BY requested_at DESC, id DESC
+         LIMIT 1'
+    );
+    $pendingCancellationStmt->execute([
+        'uid' => $uid,
+        'requestType' => 'membership_cancellation',
+        'status' => 'pending',
+    ]);
+    $pendingCancellationRow = $pendingCancellationStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    $pendingAddonStmt = $pdo->prepare(
+        'SELECT
+            r.id,
+            r.status,
+            r.target_key,
+            r.target_id,
+            r.payload_json,
+            r.requested_at,
+            a.addon_key,
+            a.name AS addon_name
+         FROM ssa_admin_requests r
+         LEFT JOIN ssa_membership_addons a ON a.id = r.target_id
+         WHERE r.uid = :uid
+           AND r.request_type = :requestType
+           AND r.status = :status
+         ORDER BY r.requested_at DESC, r.id DESC'
+    );
+    $pendingAddonStmt->execute([
+        'uid' => $uid,
+        'requestType' => 'addon_request',
+        'status' => 'pending',
+    ]);
+
+    $pendingMembershipChange = null;
+    if ($pendingChangeRow) {
+        $targetPlanKey = $pendingChangeRow['plan_key'] ?: $pendingChangeRow['target_key'];
+        $targetPlanName = $pendingChangeRow['plan_display_name'] ?: $pendingChangeRow['plan_name'];
+        $pendingMembershipChange = ssaMembershipRequestForApi($pendingChangeRow, [
+            'targetPlanKey' => $targetPlanKey !== null ? (string)$targetPlanKey : null,
+            'targetPlanName' => $targetPlanName !== null ? (string)$targetPlanName : null,
+        ]);
+    }
+
+    $pendingMembershipCancellation = ssaMembershipRequestForApi($pendingCancellationRow);
+
+    $pendingAddonRequests = [];
+    foreach ($pendingAddonStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $addonKeyValue = $row['addon_key'] ?: $row['target_key'];
+        $pendingAddonRequests[] = ssaMembershipRequestForApi($row, [
+            'addonKey' => $addonKeyValue !== null ? (string)$addonKeyValue : null,
+            'addonName' => $row['addon_name'] !== null ? (string)$row['addon_name'] : null,
+        ]);
+    }
+
+    $pendingRequests = [
+        'membershipChange' => $pendingMembershipChange,
+        'membershipCancellation' => $pendingMembershipCancellation,
+        'addons' => array_values(array_filter($pendingAddonRequests)),
+    ];
+
+    // -------------------------------------------------------------------------
     // Membership history (all rows, newest first)
     // -------------------------------------------------------------------------
     $historyStmt = $pdo->prepare(
@@ -315,6 +411,7 @@ try {
         'currentMembership' => $currentMembership,
         'availablePlans' => $availablePlans,
         'addons' => $addonList,
+        'pendingRequests' => $pendingRequests,
         'membershipHistory' => $membershipHistory,
     ]);
 
