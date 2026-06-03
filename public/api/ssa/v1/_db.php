@@ -2,6 +2,25 @@
 
 define('SSA_API_TIMEZONE', 'Europe/London');
 
+function ssaApiGetScoreboardBaseUrl(): ?string
+{
+    $url = getenv('SSA_SCOREBOARD_BASE_URL');
+    if ($url === false || trim($url) === '') {
+        return null;
+    }
+    return rtrim(trim($url), '/');
+}
+
+function ssaApiGetUserMetaValue(PDO $pdo, int $uid, string $key): ?string
+{
+    $statement = $pdo->prepare(
+        'SELECT value FROM bs_users_meta WHERE uid = :uid AND `key` = :key LIMIT 1'
+    );
+    $statement->execute(['uid' => $uid, 'key' => $key]);
+    $row = $statement->fetch();
+    return $row ? (string)$row['value'] : null;
+}
+
 function ssaApiAppRoot(): string
 {
     $root = realpath(__DIR__ . '/../../../..');

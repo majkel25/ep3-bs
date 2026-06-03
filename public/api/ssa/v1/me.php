@@ -49,6 +49,22 @@ try {
             'id' => (int)$link['id'],
         ]);
 
+        $uid = isset($link['uid']) ? (int)$link['uid'] : null;
+
+        $scoreboardMemberId = null;
+        $profilePhotoUrl = null;
+
+        if ($uid !== null && $uid > 0) {
+            $rawMemberId = ssaApiGetUserMetaValue($pdo, $uid, 'scoreboard.member_id');
+            if ($rawMemberId !== null && ctype_digit($rawMemberId) && (int)$rawMemberId > 0) {
+                $scoreboardMemberId = (int)$rawMemberId;
+                $scoreboardBaseUrl = ssaApiGetScoreboardBaseUrl();
+                if ($scoreboardBaseUrl !== null) {
+                    $profilePhotoUrl = $scoreboardBaseUrl . '/api/player-photos/' . $scoreboardMemberId . '/processed';
+                }
+            }
+        }
+
         ssaApiJsonResponse(200, [
             'status' => 'ok',
             'linked' => true,
@@ -59,7 +75,7 @@ try {
                 'scope' => $claims['scope'] ?? null,
             ],
             'user' => [
-                'uid' => isset($link['uid']) ? (int)$link['uid'] : null,
+                'uid' => $uid,
                 'alias' => $link['linked_alias'] ?? null,
                 'email' => $link['linked_email'] ?? null,
             ],
@@ -68,6 +84,8 @@ try {
                 'updatedAt' => $link['updated_at'] ?? null,
                 'lastSeenAt' => gmdate('Y-m-d H:i:s'),
             ],
+            'scoreboardMemberId' => $scoreboardMemberId,
+            'profilePhotoUrl' => $profilePhotoUrl,
         ]);
     }
 
