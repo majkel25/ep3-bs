@@ -79,8 +79,9 @@ try {
             $pdo,
             $uid,
             'membership_cancellation',
-            (string)$activeMembership['plan_key'],
-            $membershipId
+            null,
+            null,
+            false
         );
         if (!$existing) {
             $pdo->commit();
