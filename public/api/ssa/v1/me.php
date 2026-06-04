@@ -51,8 +51,9 @@ try {
 
         $uid = isset($link['uid']) ? (int)$link['uid'] : null;
 
-        $scoreboardMemberId = null;
-        $profilePhotoUrl = null;
+        $scoreboardMemberId    = null;
+        $profilePhotoUrl       = null;
+        $recordingPlayerAlias  = null;
 
         if ($uid !== null && $uid > 0) {
             $rawMemberId = ssaApiGetUserMetaValue($pdo, $uid, 'scoreboard.member_id');
@@ -62,6 +63,13 @@ try {
                 if ($scoreboardBaseUrl !== null) {
                     $profilePhotoUrl = $scoreboardBaseUrl . '/api/player-photos/' . $scoreboardMemberId . '/processed';
                 }
+            }
+
+            // Short player name used in YouTube recording titles (e.g. "Michael M").
+            // Stored in bs_users_meta; never auto-generated or inferred.
+            $rawAlias = ssaApiGetUserMetaValue($pdo, $uid, 'recording.player_alias');
+            if ($rawAlias !== null && trim($rawAlias) !== '') {
+                $recordingPlayerAlias = trim($rawAlias);
             }
         }
 
@@ -84,8 +92,9 @@ try {
                 'updatedAt' => $link['updated_at'] ?? null,
                 'lastSeenAt' => gmdate('Y-m-d H:i:s'),
             ],
-            'scoreboardMemberId' => $scoreboardMemberId,
-            'profilePhotoUrl' => $profilePhotoUrl,
+            'scoreboardMemberId'   => $scoreboardMemberId,
+            'profilePhotoUrl'      => $profilePhotoUrl,
+            'recordingPlayerAlias' => $recordingPlayerAlias,
         ]);
     }
 
