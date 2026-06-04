@@ -28,19 +28,23 @@ if (empty($apiKey) || empty($playlistId)) {
 
 // ---------------------------------------------------------------------------
 // Cache — file-based, 10-minute TTL (matches JWKS cache pattern in _auth0.php)
+// Pass ?refresh=1 to bypass cache and force a live re-fetch (requires same Auth0 token).
 // ---------------------------------------------------------------------------
 
 define('YOUTUBE_CACHE_TTL', 600);
-$cacheFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ssa_youtube_recordings_v1.json';
+$cacheFile   = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'ssa_youtube_recordings_v1.json';
+$forceRefresh = isset($_GET['refresh']) && $_GET['refresh'] === '1';
 
-if (is_file($cacheFile) && (time() - filemtime($cacheFile)) < YOUTUBE_CACHE_TTL) {
+if (!$forceRefresh && is_file($cacheFile) && (time() - filemtime($cacheFile)) < YOUTUBE_CACHE_TTL) {
     $cached = file_get_contents($cacheFile);
     $decoded = json_decode($cached, true);
     if (is_array($decoded) && isset($decoded['videos'])) {
+        // Inject cached:true into the cached payload without altering the stored copy.
+        $decoded['cached'] = true;
         header('Content-Type: application/json; charset=utf-8');
         header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
         http_response_code(200);
-        echo $cached;
+        echo json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         exit;
     }
 }
@@ -170,9 +174,10 @@ function ytIsLiveRecording(string $raw): bool
 // Step 1 — collect all video IDs from the playlist (paginate, max 200 items)
 // ---------------------------------------------------------------------------
 
-$videoIds   = [];
-$pageToken  = null;
-$pageLimit  = 4; // 4 × 50 = 200 items maximum
+$videoIds          = [];
+$pageToken         = null;
+$pageLimit         = 4; // 4 × 50 = 200 items maximum
+$playlistItemCount = 0;
 
 for ($page = 0; $page < $pageLimit; $page++) {
     $params = http_build_query(array_filter([
@@ -194,6 +199,7 @@ for ($page = 0; $page < $pageLimit; $page++) {
         $videoId = $item['snippet']['resourceId']['videoId'] ?? null;
         if ($videoId) {
             $videoIds[] = $videoId;
+            $playlistItemCount++;
         }
     }
 
@@ -204,7 +210,18 @@ for ($page = 0; $page < $pageLimit; $page++) {
 }
 
 if (empty($videoIds)) {
-    $result = ['videos' => [], 'cachedAt' => date('c'), 'source' => 'youtube-api'];
+    $result = [
+        'status'                  => 'ok',
+        'source'                  => 'youtube-api',
+        'cached'                  => false,
+        'apiKeyPresent'           => true,
+        'playlistIdPresent'       => true,
+        'playlistItemCount'       => $playlistItemCount,
+        'videoDetailsCount'       => 0,
+        'filteredRecordingCount'  => 0,
+        'videos'                  => [],
+        'cachedAt'                => date('c'),
+    ];
     file_put_contents($cacheFile, json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     ssaApiJsonResponse(200, $result);
 }
@@ -213,7 +230,8 @@ if (empty($videoIds)) {
 // Step 2 — fetch video details in batches of 50
 // ---------------------------------------------------------------------------
 
-$allVideos = [];
+$allVideos        = [];
+$videoDetailsCount = 0;
 
 foreach (array_chunk($videoIds, 50) as $batch) {
     $params = http_build_query([
@@ -237,6 +255,7 @@ foreach (array_chunk($videoIds, 50) as $batch) {
 
         $videoId  = $item['id'] ?? '';
         $rawTitle = $snippet['title'] ?? '';
+        $videoDetailsCount++;
 
         if (!ytIsLiveRecording($rawTitle)) {
             continue;
@@ -295,9 +314,16 @@ usort($allVideos, function (array $a, array $b): int {
 // ---------------------------------------------------------------------------
 
 $result = [
-    'videos'   => $allVideos,
-    'cachedAt' => date('c'),
-    'source'   => 'youtube-api',
+    'status'                 => 'ok',
+    'source'                 => 'youtube-api',
+    'cached'                 => false,
+    'apiKeyPresent'          => true,
+    'playlistIdPresent'      => true,
+    'playlistItemCount'      => $playlistItemCount,
+    'videoDetailsCount'      => $videoDetailsCount,
+    'filteredRecordingCount' => count($allVideos),
+    'videos'                 => $allVideos,
+    'cachedAt'               => date('c'),
 ];
 
 file_put_contents($cacheFile, json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
