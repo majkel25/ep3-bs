@@ -6,8 +6,8 @@ declare(strict_types=1);
  * POST /api/ssa/v1/booking-running-late.php
  *
  * Lets a member inform the club they are running late for a table booking.
- * Sends APNs push notifications (and in-app notifications) to every other
- * member who has any active booking on the same date, on any table.
+ * Sends APNs push notifications (and in-app notifications) to every
+ * member (including the sender) who has any active booking on the same date, on any table.
  *
  * Idempotent: one notification per sender per booking (uid + rule_key +
  * notification_date + booking_signature_hash). Returns already_sent if the
@@ -212,28 +212,24 @@ try {
 
     if ($idempStmt->fetch()) {
         ssaApiJsonResponse(200, [
-            'status'        => 'ok',
+            'status'        => 'already_sent',
             'skippedReason' => 'already_sent',
             'bookingDate'   => $date,
             'senderUid'     => $callerUid,
-            'message'       => 'A Running Late notification has already been sent for this booking.',
+            'message'       => 'You have already sent a running late notice for this booking.',
         ]);
     }
 
-    // ── Find all members with any booking today (any table) ───────────────────
+    // ── Find all members with any booking today (any table), including sender ──
 
     $allDayStmt = $pdo->prepare(
         "SELECT DISTINCT b.uid
          FROM bs_reservations r
          INNER JOIN bs_bookings b ON b.bid = r.bid
          WHERE r.date   = :date
-           AND b.uid   <> :callerUid
            AND b.status <> 'cancelled'"
     );
-    $allDayStmt->execute([
-        'date'      => $date,
-        'callerUid' => $callerUid,
-    ]);
+    $allDayStmt->execute(['date' => $date]);
     $allDayUids = array_column($allDayStmt->fetchAll(), 'uid');
     $allDayUids = array_unique(array_map('intval', $allDayUids));
 
@@ -296,6 +292,22 @@ try {
         }
     }
 
+    // ── Determine outcome status ──────────────────────────────────────────────
+
+    if ($recipientUserCount === 0) {
+        $logStatus       = 'no_recipients';
+        $responseStatus  = 'no_recipients';
+        $responseMessage = 'No booked members were found for today.';
+    } elseif ($totalTokenCount === 0) {
+        $logStatus       = 'no_tokens';
+        $responseStatus  = 'no_tokens';
+        $responseMessage = 'No push notification tokens were available for today\'s booked members.';
+    } else {
+        $logStatus       = 'sent';
+        $responseStatus  = 'sent';
+        $responseMessage = 'Members have been notified.';
+    }
+
     // ── Record idempotency row ────────────────────────────────────────────────
 
     $logStmt = $pdo->prepare(
@@ -304,7 +316,7 @@ try {
              token_count, success_count, failure_count, status, sent_at)
          VALUES
             (:uid, 'running_late', :date, :hash, 'running_late',
-             :tokenCount, :successCount, :failureCount, 'sent', UTC_TIMESTAMP())"
+             :tokenCount, :successCount, :failureCount, :logStatus, UTC_TIMESTAMP())"
     );
     $logStmt->execute([
         'uid'          => $callerUid,
@@ -313,21 +325,18 @@ try {
         'tokenCount'   => $totalTokenCount,
         'successCount' => $totalSuccessCount,
         'failureCount' => $totalFailureCount,
+        'logStatus'    => $logStatus,
     ]);
 
     ssaApiJsonResponse(200, [
-        'status'             => 'ok',
+        'status'             => $responseStatus,
         'bookingDate'        => $date,
         'senderUid'          => $callerUid,
         'recipientUserCount' => $recipientUserCount,
         'tokenCount'         => $totalTokenCount,
         'successCount'       => $totalSuccessCount,
         'failureCount'       => $totalFailureCount,
-        'message'            => $totalSuccessCount > 0
-            ? 'Members at the club today have been notified.'
-            : ($recipientUserCount === 0
-                ? 'No other members have bookings today.'
-                : 'Members were found but push notifications could not be delivered.'),
+        'message'            => $responseMessage,
     ]);
 } catch (Throwable $exception) {
     error_log('SSA running-late endpoint failed: ' . $exception->getMessage());
