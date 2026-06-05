@@ -123,22 +123,13 @@ try {
     // ── Caller first name ─────────────────────────────────────────────────────
 
     $userStmt = $pdo->prepare(
-        'SELECT firstname, alias FROM bs_users WHERE uid = :uid LIMIT 1'
+        'SELECT alias FROM bs_users WHERE uid = :uid LIMIT 1'
     );
     $userStmt->execute(['uid' => $callerUid]);
-    $userRow   = $userStmt->fetch();
-    $firstName = '';
-
-    if (is_array($userRow)) {
-        $firstName = trim((string)($userRow['firstname'] ?? ''));
-        if ($firstName === '') {
-            $firstName = trim((string)($userRow['alias'] ?? ''));
-        }
-    }
-
-    if ($firstName === '') {
-        $firstName = 'A member';
-    }
+    $userRow = $userStmt->fetch();
+    $alias   = is_array($userRow) ? trim((string)($userRow['alias'] ?? '')) : '';
+    // First word of alias only (e.g. "Michael M" → "Michael"). Fallback: "Member".
+    $firstName = ($alias !== '') ? explode(' ', $alias)[0] : 'Member';
 
     // ── Verify the booking belongs to the caller ──────────────────────────────
 
