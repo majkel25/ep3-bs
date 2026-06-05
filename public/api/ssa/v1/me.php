@@ -71,6 +71,13 @@ try {
             if ($rawAlias !== null && trim($rawAlias) !== '') {
                 $recordingPlayerAlias = trim($rawAlias);
             }
+
+            // User type / role. Stored in bs_users_meta; defaults to 'member'.
+            $validUserTypes = ['member', 'coach', 'club_owner', 'admin'];
+            $rawUserType = ssaApiGetUserMetaValue($pdo, $uid, 'ssa.user_type');
+            $userType = ($rawUserType !== null && in_array($rawUserType, $validUserTypes, true))
+                ? $rawUserType
+                : 'member';
         }
 
         ssaApiJsonResponse(200, [
@@ -95,6 +102,11 @@ try {
             'scoreboardMemberId'   => $scoreboardMemberId,
             'profilePhotoUrl'      => $profilePhotoUrl,
             'recordingPlayerAlias' => $recordingPlayerAlias,
+            'userType'             => $userType,
+            'isMember'             => $userType === 'member',
+            'isCoach'              => $userType === 'coach',
+            'isClubOwner'          => $userType === 'club_owner',
+            'isAdmin'              => $userType === 'admin',
         ]);
     }
 
