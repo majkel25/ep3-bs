@@ -381,7 +381,16 @@ function ssaDailyBookingReminderRun(PDO $pdo, DateTimeImmutable $now, array $opt
     $uid = isset($options['uid']) && $options['uid'] !== null ? (int)$options['uid'] : null;
     $force = (bool)($options['force'] ?? false);
 
-    ssaDailyBookingReminderEnsureLocalTimeGuard($now, $force);
+    if (!$force && $now->format('H') !== '08') {
+        return [
+            'status' => 'skipped',
+            'skippedReason' => 'outside_reminder_window',
+            'localTime' => $now->format('Y-m-d H:i:s T'),
+            'timezone' => SSA_API_TIMEZONE,
+            'message' => 'Outside daily booking reminder window. Expected Europe/London hour 08. Use force=true for manual testing.',
+        ];
+    }
+
     ssaDailyBookingReminderEnsureLogTable($pdo);
 
     $date = $now->format('Y-m-d');

@@ -16,6 +16,7 @@ declare(strict_types=1);
  * In scheduled use, the workflow sends no body (dryRun=false, uid=null, force=false).
  */
 
+require_once __DIR__ . '/_auth0.php';
 require_once __DIR__ . '/_daily_booking_reminder.php';
 
 // Only called by the cron workflow — no Auth0 token required, just the shared secret.
