@@ -6,8 +6,12 @@ declare(strict_types=1);
  * POST /api/ssa/v1/booking-running-late.php
  *
  * Lets a member inform the club they are running late for a table booking.
- * Sends APNs push notifications (and writes in-app notifications) to any
- * other members who have an adjacent booking on the same table today.
+ * Sends APNs push notifications (and in-app notifications) to every other
+ * member who has any active booking on the same date, on any table.
+ *
+ * Idempotent: one notification per sender per booking (uid + rule_key +
+ * notification_date + booking_signature_hash). Returns already_sent if the
+ * caller has already sent a Running Late for this booking today.
  *
  * Auth: Auth0 bearer token.
  *
@@ -15,6 +19,10 @@ declare(strict_types=1);
  *   bookingId    int  – bs_reservations.bid (preferred)
  *   reservationId int – bs_reservations.rid (fallback)
  *   At least one of bookingId / reservationId is required.
+ *
+ * Response fields:
+ *   status, bookingDate, senderUid, recipientUserCount,
+ *   tokenCount, successCount, failureCount, skippedReason (if any)
  */
 
 require_once __DIR__ . '/_auth0.php';
@@ -29,8 +37,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     ]);
 }
 
-$claims    = ssaApiRequireAuth0Claims();
-$auth0Sub  = isset($claims['sub']) ? trim((string)$claims['sub']) : '';
+$claims   = ssaApiRequireAuth0Claims();
+$auth0Sub = isset($claims['sub']) ? trim((string)$claims['sub']) : '';
 
 if ($auth0Sub === '') {
     ssaApiJsonResponse(401, [
@@ -61,7 +69,34 @@ if ($bookingId === null && $reservationId === null) {
     ]);
 }
 
-// ── Main logic ───────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function ssaRunningLateEnsureLogTable(PDO $pdo): void
+{
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS ssa_push_notification_log (
+            id                    BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
+            uid                   INT UNSIGNED     NOT NULL,
+            rule_key              VARCHAR(96)      NOT NULL,
+            notification_date     DATE             NOT NULL,
+            booking_signature_hash CHAR(64)        NULL,
+            event_type            VARCHAR(96)      NOT NULL,
+            payload_json          TEXT             NULL,
+            status                VARCHAR(32)      NOT NULL DEFAULT 'sending',
+            token_count           INT UNSIGNED     NOT NULL DEFAULT 0,
+            success_count         INT UNSIGNED     NOT NULL DEFAULT 0,
+            failure_count         INT UNSIGNED     NOT NULL DEFAULT 0,
+            error_message         VARCHAR(512)     NULL,
+            sent_at               DATETIME         NULL,
+            created_at            DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at            DATETIME         NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            UNIQUE KEY unique_booking_notification (uid, rule_key, notification_date, booking_signature_hash)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+}
+
+// ── Main logic ────────────────────────────────────────────────────────────────
 
 try {
     $pdo = ssaApiCreatePdo();
@@ -85,7 +120,27 @@ try {
 
     $callerUid = (int)$link['uid'];
 
-    // ── Verify the booking belongs to the caller ─────────────────────────────
+    // ── Caller first name ─────────────────────────────────────────────────────
+
+    $userStmt = $pdo->prepare(
+        'SELECT firstname, alias FROM bs_users WHERE uid = :uid LIMIT 1'
+    );
+    $userStmt->execute(['uid' => $callerUid]);
+    $userRow   = $userStmt->fetch();
+    $firstName = '';
+
+    if (is_array($userRow)) {
+        $firstName = trim((string)($userRow['firstname'] ?? ''));
+        if ($firstName === '') {
+            $firstName = trim((string)($userRow['alias'] ?? ''));
+        }
+    }
+
+    if ($firstName === '') {
+        $firstName = 'A member';
+    }
+
+    // ── Verify the booking belongs to the caller ──────────────────────────────
 
     $conditions = [];
     $params     = ['callerUid' => $callerUid];
@@ -122,12 +177,13 @@ try {
         ]);
     }
 
-    $tableId   = isset($callerBooking['sid'])  ? (int)$callerBooking['sid']  : null;
+    $tableId   = isset($callerBooking['sid'])        ? (int)$callerBooking['sid']        : null;
     $tableName = isset($callerBooking['table_name']) ? (string)$callerBooking['table_name'] : null;
     $date      = (string)($callerBooking['date'] ?? '');
-    $timeEnd   = ssaApiNormaliseTimeValue($callerBooking['time_end'] ?? null);
+    $timeStart = ssaApiNormaliseTimeValue($callerBooking['time_start'] ?? null);
+    $timeEnd   = ssaApiNormaliseTimeValue($callerBooking['time_end']   ?? null);
 
-    // ── Only allow for today's bookings ───────────────────────────────────────
+    // ── Today-only guard ──────────────────────────────────────────────────────
 
     $timezone = new DateTimeZone(SSA_API_TIMEZONE);
     $today    = (new DateTimeImmutable('today', $timezone))->format('Y-m-d');
@@ -139,7 +195,41 @@ try {
         ]);
     }
 
-    // ── Find all members with any booking today (any table) ──────────────────
+    // ── Idempotency check ─────────────────────────────────────────────────────
+    // One Running Late notification per sender per booking per day.
+
+    ssaRunningLateEnsureLogTable($pdo);
+
+    $bookingKey = hash(
+        'sha256',
+        'bid:' . ($bookingId ?? '') . '|rid:' . ($reservationId ?? '')
+    );
+
+    $idempStmt = $pdo->prepare(
+        "SELECT id FROM ssa_push_notification_log
+         WHERE uid                    = :uid
+           AND rule_key               = 'running_late'
+           AND notification_date      = :date
+           AND booking_signature_hash = :hash
+         LIMIT 1"
+    );
+    $idempStmt->execute([
+        'uid'  => $callerUid,
+        'date' => $today,
+        'hash' => $bookingKey,
+    ]);
+
+    if ($idempStmt->fetch()) {
+        ssaApiJsonResponse(200, [
+            'status'        => 'ok',
+            'skippedReason' => 'already_sent',
+            'bookingDate'   => $date,
+            'senderUid'     => $callerUid,
+            'message'       => 'A Running Late notification has already been sent for this booking.',
+        ]);
+    }
+
+    // ── Find all members with any booking today (any table) ───────────────────
 
     $allDayStmt = $pdo->prepare(
         "SELECT DISTINCT b.uid
@@ -156,15 +246,27 @@ try {
     $allDayUids = array_column($allDayStmt->fetchAll(), 'uid');
     $allDayUids = array_unique(array_map('intval', $allDayUids));
 
-    // ── Send notifications ────────────────────────────────────────────────────
+    // ── Build notification content ────────────────────────────────────────────
 
-    $tableLabel   = $tableName ? 'Table ' . $tableName : 'a table';
-    $notifyTitle  = 'Surrey Snooker Academy';
-    $notifyBody   = 'A member is running late for their booking today on ' . $tableLabel . '. They should be with you shortly.';
+    $tableLabel = $tableName !== null && $tableName !== '' ? 'Table ' . $tableName : 'the table';
+    $timeSlot   = ($timeStart !== null && $timeEnd !== null)
+        ? $timeStart . '–' . $timeEnd
+        : null;
+
+    $notifyTitle = 'Surrey Snooker Academy';
+    $notifyBody  = $timeSlot !== null
+        ? "{$firstName} is running late for their booking on {$tableLabel}, {$timeSlot}."
+        : "{$firstName} is running late for their booking on {$tableLabel}.";
     $notifyType   = 'running_late';
     $notifyScreen = 'bookings';
 
-    $notifiedCount = 0;
+    // ── Send notifications ────────────────────────────────────────────────────
+
+    $recipientUserCount = count($allDayUids);
+    $totalTokenCount    = 0;
+    $totalSuccessCount  = 0;
+    $totalFailureCount  = 0;
+
     ssaUserNotificationsEnsureTable($pdo);
 
     foreach ($allDayUids as $targetUid) {
@@ -191,30 +293,50 @@ try {
         $tokens = $tokenStmt->fetchAll();
 
         if (count($tokens) > 0) {
-            $pushResult = ssaPushSendToTokenRows(
+            $pushResult         = ssaPushSendToTokenRows(
                 $tokens,
                 $notifyTitle,
                 $notifyBody,
                 ['screen' => $notifyScreen, 'type' => $notifyType]
             );
-            if ($pushResult['successCount'] > 0) {
-                $notifiedCount++;
-            }
+            $totalTokenCount   += $pushResult['tokenCount'];
+            $totalSuccessCount += $pushResult['successCount'];
+            $totalFailureCount += $pushResult['failureCount'];
         }
     }
 
-    $memberCount = count($allDayUids);
+    // ── Record idempotency row ────────────────────────────────────────────────
+
+    $logStmt = $pdo->prepare(
+        "INSERT INTO ssa_push_notification_log
+            (uid, rule_key, notification_date, booking_signature_hash, event_type,
+             token_count, success_count, failure_count, status, sent_at)
+         VALUES
+            (:uid, 'running_late', :date, :hash, 'running_late',
+             :tokenCount, :successCount, :failureCount, 'sent', UTC_TIMESTAMP())"
+    );
+    $logStmt->execute([
+        'uid'          => $callerUid,
+        'date'         => $today,
+        'hash'         => $bookingKey,
+        'tokenCount'   => $totalTokenCount,
+        'successCount' => $totalSuccessCount,
+        'failureCount' => $totalFailureCount,
+    ]);
 
     ssaApiJsonResponse(200, [
-        'status'        => 'ok',
-        'sent'          => $notifiedCount > 0,
-        'notifiedCount' => $notifiedCount,
-        'memberCount'   => $memberCount,
-        'message'       => $notifiedCount > 0
+        'status'             => 'ok',
+        'bookingDate'        => $date,
+        'senderUid'          => $callerUid,
+        'recipientUserCount' => $recipientUserCount,
+        'tokenCount'         => $totalTokenCount,
+        'successCount'       => $totalSuccessCount,
+        'failureCount'       => $totalFailureCount,
+        'message'            => $totalSuccessCount > 0
             ? 'Members at the club today have been notified.'
-            : ($memberCount === 0
+            : ($recipientUserCount === 0
                 ? 'No other members have bookings today.'
-                : 'Members were found but notifications could not be delivered.'),
+                : 'Members were found but push notifications could not be delivered.'),
     ]);
 } catch (Throwable $exception) {
     error_log('SSA running-late endpoint failed: ' . $exception->getMessage());
