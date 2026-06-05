@@ -139,60 +139,35 @@ try {
         ]);
     }
 
-    // ── Find adjacent bookings on the same table ──────────────────────────────
-    // Notify members whose booking starts within ±60 minutes of the end of the
-    // caller's slot — most commonly this is the member in the next time block.
+    // ── Find all members with any booking today (any table) ──────────────────
 
-    $adjacentUids = [];
-
-    if ($tableId !== null && $timeEnd !== null) {
-        $adjStmt = $pdo->prepare(
-            "SELECT DISTINCT b.uid, r.time_start
-             FROM bs_reservations r
-             INNER JOIN bs_bookings b ON b.bid = r.bid
-             WHERE b.sid    = :tableId
-               AND r.date   = :date
-               AND b.uid   <> :callerUid
-               AND b.status <> 'cancelled'
-             ORDER BY r.time_start ASC"
-        );
-        $adjStmt->execute([
-            'tableId'   => $tableId,
-            'date'      => $date,
-            'callerUid' => $callerUid,
-        ]);
-        $adjRows   = $adjStmt->fetchAll();
-        $endSecs   = ssaApiTimeToSeconds($timeEnd);
-
-        foreach ($adjRows as $row) {
-            $startSecs = ssaApiTimeToSeconds(
-                ssaApiNormaliseTimeValue($row['time_start'] ?? null)
-            );
-            if ($startSecs === null || $endSecs === null) {
-                continue;
-            }
-            $diff = $startSecs - $endSecs;
-            // Within ±60 min of the caller's slot end.
-            if ($diff >= -3600 && $diff <= 3600) {
-                $adjacentUids[] = (int)$row['uid'];
-            }
-        }
-
-        $adjacentUids = array_unique($adjacentUids);
-    }
+    $allDayStmt = $pdo->prepare(
+        "SELECT DISTINCT b.uid
+         FROM bs_reservations r
+         INNER JOIN bs_bookings b ON b.bid = r.bid
+         WHERE r.date   = :date
+           AND b.uid   <> :callerUid
+           AND b.status <> 'cancelled'"
+    );
+    $allDayStmt->execute([
+        'date'      => $date,
+        'callerUid' => $callerUid,
+    ]);
+    $allDayUids = array_column($allDayStmt->fetchAll(), 'uid');
+    $allDayUids = array_unique(array_map('intval', $allDayUids));
 
     // ── Send notifications ────────────────────────────────────────────────────
 
-    $tableLabel  = $tableName ? 'Table ' . $tableName : 'a table';
-    $notifyTitle = 'Surrey Snooker Academy';
-    $notifyBody  = 'A member is running late for their slot on ' . $tableLabel . '. They should be with you shortly.';
-    $notifyType  = 'running_late';
+    $tableLabel   = $tableName ? 'Table ' . $tableName : 'a table';
+    $notifyTitle  = 'Surrey Snooker Academy';
+    $notifyBody   = 'A member is running late for their booking today on ' . $tableLabel . '. They should be with you shortly.';
+    $notifyType   = 'running_late';
     $notifyScreen = 'bookings';
 
     $notifiedCount = 0;
     ssaUserNotificationsEnsureTable($pdo);
 
-    foreach ($adjacentUids as $targetUid) {
+    foreach ($allDayUids as $targetUid) {
         // Write in-app notification.
         ssaUserNotificationsCreate(
             $pdo,
@@ -228,18 +203,18 @@ try {
         }
     }
 
-    $adjacentCount = count($adjacentUids);
+    $memberCount = count($allDayUids);
 
     ssaApiJsonResponse(200, [
-        'status'               => 'ok',
-        'sent'                 => $notifiedCount > 0,
-        'notifiedCount'        => $notifiedCount,
-        'adjacentBookingCount' => $adjacentCount,
-        'message'              => $notifiedCount > 0
-            ? 'Nearby members have been notified.'
-            : ($adjacentCount === 0
-                ? 'No members with adjacent bookings were found.'
-                : 'Adjacent members were found but notifications could not be delivered.'),
+        'status'        => 'ok',
+        'sent'          => $notifiedCount > 0,
+        'notifiedCount' => $notifiedCount,
+        'memberCount'   => $memberCount,
+        'message'       => $notifiedCount > 0
+            ? 'Members at the club today have been notified.'
+            : ($memberCount === 0
+                ? 'No other members have bookings today.'
+                : 'Members were found but notifications could not be delivered.'),
     ]);
 } catch (Throwable $exception) {
     error_log('SSA running-late endpoint failed: ' . $exception->getMessage());
