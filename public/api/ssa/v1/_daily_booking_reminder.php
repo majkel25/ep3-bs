@@ -29,7 +29,7 @@ function ssaDailyBookingReminderEnsureLocalTimeGuard(DateTimeImmutable $now, boo
         return;
     }
 
-    if ($now->format('H') !== '08') {
+    if ($currentHour < 6 || $currentHour > 11) {
         throw new RuntimeException(
             'Outside daily booking reminder window. Local time is ' .
             $now->format('Y-m-d H:i:s T') .
