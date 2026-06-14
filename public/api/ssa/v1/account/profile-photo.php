@@ -76,17 +76,21 @@ if (!isset($_FILES['photo']) || $_FILES['photo']['error'] === UPLOAD_ERR_NO_FILE
 $file = $_FILES['photo'];
 
 if ($file['error'] !== UPLOAD_ERR_OK) {
+    $errCode = $file['error'];
+    if ($errCode === UPLOAD_ERR_INI_SIZE || $errCode === UPLOAD_ERR_FORM_SIZE) {
+        ssaApiJsonResponse(400, ['error' => 'file_too_large', 'message' => 'Photo is too large.']);
+    }
+    if ($errCode === UPLOAD_ERR_PARTIAL) {
+        ssaApiJsonResponse(400, ['error' => 'partial_upload', 'message' => 'Photo upload was interrupted. Please try again.']);
+    }
     $uploadErrors = [
-        UPLOAD_ERR_INI_SIZE   => 'The uploaded file exceeds the server upload limit.',
-        UPLOAD_ERR_FORM_SIZE  => 'The uploaded file exceeds the form size limit.',
-        UPLOAD_ERR_PARTIAL    => 'The uploaded file was only partially uploaded.',
-        UPLOAD_ERR_NO_TMP_DIR => 'Missing a temporary folder.',
-        UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk.',
-        UPLOAD_ERR_EXTENSION  => 'A PHP extension stopped the file upload.',
+        UPLOAD_ERR_NO_TMP_DIR => 'Missing a temporary folder on the server.',
+        UPLOAD_ERR_CANT_WRITE => 'Failed to write the file to disk.',
+        UPLOAD_ERR_EXTENSION  => 'A server extension stopped the file upload.',
     ];
     ssaApiJsonResponse(400, [
         'error' => 'upload_error',
-        'message' => $uploadErrors[$file['error']] ?? 'Upload failed with error code ' . $file['error'] . '.',
+        'message' => $uploadErrors[$errCode] ?? 'Upload failed with error code ' . $errCode . '.',
     ]);
 }
 
