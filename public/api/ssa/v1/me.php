@@ -54,6 +54,7 @@ try {
         $scoreboardMemberId    = null;
         $profilePhotoUrl       = null;
         $recordingPlayerAlias  = null;
+        $phone                 = null;
 
         if ($uid !== null && $uid > 0) {
             $rawMemberId = ssaApiGetUserMetaValue($pdo, $uid, 'scoreboard.member_id');
@@ -78,6 +79,12 @@ try {
             $userType = ($rawUserType !== null && in_array($rawUserType, $validUserTypes, true))
                 ? $rawUserType
                 : 'member';
+
+            // Phone number. Stored in bs_users_meta key 'phone'.
+            $rawPhone = ssaApiGetUserMetaValue($pdo, $uid, 'phone');
+            if ($rawPhone !== null && trim($rawPhone) !== '') {
+                $phone = trim($rawPhone);
+            }
         }
 
         ssaApiJsonResponse(200, [
@@ -107,6 +114,7 @@ try {
             'isCoach'              => $userType === 'coach',
             'isClubOwner'          => $userType === 'club_owner',
             'isAdmin'              => $userType === 'admin',
+            'phone'                => $phone,
         ]);
     }
 
