@@ -68,7 +68,7 @@ try {
 
 if (!isset($_FILES['photo']) || $_FILES['photo']['error'] === UPLOAD_ERR_NO_FILE) {
     ssaApiJsonResponse(400, [
-        'error' => 'missing_photo',
+        'error' => 'missing_file',
         'message' => 'A file field named "photo" is required.',
     ]);
 }
@@ -95,15 +95,15 @@ if ($file['size'] <= 0) {
     ssaApiJsonResponse(400, ['error' => 'empty_file', 'message' => 'The uploaded file is empty.']);
 }
 if ($file['size'] > $maxBytes) {
-    ssaApiJsonResponse(400, ['error' => 'file_too_large', 'message' => 'The file exceeds the 5 MB limit.']);
+    ssaApiJsonResponse(400, ['error' => 'file_too_large', 'message' => 'Photo is too large.']);
 }
 
 $allowedMimeTypes = ['image/jpeg', 'image/png', 'image/webp'];
 $detectedMime = mime_content_type($file['tmp_name']);
 if ($detectedMime === false || !in_array(strtolower($detectedMime), $allowedMimeTypes, true)) {
     ssaApiJsonResponse(400, [
-        'error' => 'invalid_content_type',
-        'message' => 'Only JPEG, PNG and WebP images are accepted.',
+        'error' => 'unsupported_image',
+        'message' => 'Unsupported photo format.',
     ]);
 }
 
@@ -113,8 +113,8 @@ $scoreboardInternalUrl = getenv('SSA_SCOREBOARD_INTERNAL_URL');
 if ($scoreboardInternalUrl === false || trim($scoreboardInternalUrl) === '') {
     error_log('SSA API profile-photo: SSA_SCOREBOARD_INTERNAL_URL is not configured.');
     ssaApiJsonResponse(503, [
-        'error' => 'scoreboard_not_configured',
-        'message' => 'Photo upload is not available. Contact the club.',
+        'error' => 'scoreboard_url_missing',
+        'message' => 'Photo service is not configured.',
     ]);
 }
 $scoreboardInternalUrl = rtrim(trim($scoreboardInternalUrl), '/');
@@ -123,12 +123,13 @@ $internalApiKey = getenv('SSA_INTERNAL_API_KEY');
 if ($internalApiKey === false || trim($internalApiKey) === '') {
     error_log('SSA API profile-photo: SSA_INTERNAL_API_KEY is not configured.');
     ssaApiJsonResponse(503, [
-        'error' => 'scoreboard_not_configured',
-        'message' => 'Photo upload is not available. Contact the club.',
+        'error' => 'internal_key_missing',
+        'message' => 'Photo service is not configured.',
     ]);
 }
 
 $uploadUrl = $scoreboardInternalUrl . '/api/internal/player-photos/' . $scoreboardMemberId . '/upload';
+error_log('SSA API profile-photo: forwarding to scoreboard memberId=' . $scoreboardMemberId . ' url=' . $uploadUrl);
 
 $curlFile = new CURLFile($file['tmp_name'], $detectedMime, 'photo');
 
@@ -153,16 +154,17 @@ curl_close($ch);
 if ($curlError !== '') {
     error_log('SSA API profile-photo: cURL error forwarding to scoreboard: ' . $curlError);
     ssaApiJsonResponse(502, [
-        'error' => 'scoreboard_unreachable',
-        'message' => 'Could not reach the photo processing service. Try again later.',
+        'error'   => 'scoreboard_forward_failed',
+        'message' => 'Photo service rejected the upload.',
     ]);
 }
 
+error_log('SSA API profile-photo: scoreboard responded HTTP ' . $httpCode . ' for memberId=' . $scoreboardMemberId);
+
 if ($httpCode === 401 || $httpCode === 403) {
-    error_log('SSA API profile-photo: scoreboard rejected internal API key (HTTP ' . $httpCode . ').');
-    ssaApiJsonResponse(500, [
-        'error' => 'scoreboard_auth_failed',
-        'message' => 'Internal authentication with the photo service failed.',
+    ssaApiJsonResponse(503, [
+        'error'   => 'scoreboard_auth_failed',
+        'message' => 'Photo service is not configured.',
     ]);
 }
 
@@ -170,15 +172,17 @@ if ($httpCode === 400) {
     $decoded = json_decode($responseBody, true);
     ssaApiJsonResponse(400, [
         'error'   => $decoded['error'] ?? 'upload_rejected',
-        'message' => $decoded['message'] ?? 'The photo was rejected by the processing service.',
+        'message' => $decoded['message'] ?? 'Photo service rejected the upload.',
     ]);
 }
 
 if ($httpCode !== 200) {
-    error_log('SSA API profile-photo: scoreboard returned HTTP ' . $httpCode . ': ' . $responseBody);
+    error_log('SSA API profile-photo: scoreboard unexpected HTTP ' . $httpCode . ' preview=' . substr((string)$responseBody, 0, 200));
     ssaApiJsonResponse(502, [
-        'error'   => 'scoreboard_error',
-        'message' => 'The photo processing service returned an unexpected response.',
+        'error'                      => 'scoreboard_forward_failed',
+        'message'                    => 'Photo service rejected the upload.',
+        'scoreboard_http_status'     => $httpCode,
+        'scoreboard_response_preview' => substr((string)$responseBody, 0, 200),
     ]);
 }
 
