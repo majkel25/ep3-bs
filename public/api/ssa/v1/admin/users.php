@@ -13,6 +13,7 @@ declare(strict_types=1);
  *
  * Response:
  *   status, users[], total
+ *   Each user: uid, alias, email, phone, userType, scoreboardMemberId, profilePhotoUrl
  */
 
 require_once __DIR__ . '/../_auth0.php';
@@ -53,61 +54,86 @@ try {
     $search = isset($_GET['search']) ? trim((string)$_GET['search']) : '';
     $limit  = min(200, max(1, (int)($_GET['limit'] ?? 50)));
 
-    // Build query.
+    // Build WHERE clause. Note: `key` is a MySQL reserved word — always backtick-quoted.
     $where  = [];
     $params = [];
 
     if ($search !== '') {
         if (preg_match('/^uid:(\d+)$/', $search, $m)) {
-            $where[]        = 'u.uid = :exactUid';
-            $params['exactUid'] = (int)$m[1];
+            $where[]              = 'u.uid = :exactUid';
+            $params['exactUid']   = (int)$m[1];
         } else {
-            $where[]         = '(u.alias LIKE :q OR u.email LIKE :q)';
-            $params['q']     = '%' . $search . '%';
+            // Native prepared statements (EMULATE_PREPARES=false) require unique param names
+            // for each occurrence — use :qAlias, :qEmail, :qPhone.
+            $where[] = '(u.alias LIKE :qAlias OR u.email LIKE :qEmail OR EXISTS (
+                            SELECT 1 FROM bs_users_meta pm
+                            WHERE pm.uid = u.uid AND pm.`key` = \'phone\' AND pm.value LIKE :qPhone
+                        ))';
+            $like                = '%' . $search . '%';
+            $params['qAlias']    = $like;
+            $params['qEmail']    = $like;
+            $params['qPhone']    = $like;
         }
     }
 
     $whereClause = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
 
-    $stmt = $pdo->prepare(
-        "SELECT u.uid, u.alias, u.email,
-                meta_phone.value  AS phone,
-                meta_type.value   AS user_type,
-                meta_sb.value     AS scoreboard_member_id
-         FROM bs_users u
-         LEFT JOIN bs_users_meta meta_phone ON meta_phone.uid = u.uid AND meta_phone.key = 'ssa.phone'
-         LEFT JOIN bs_users_meta meta_type  ON meta_type.uid  = u.uid AND meta_type.key  = 'ssa.user_type'
-         LEFT JOIN bs_users_meta meta_sb    ON meta_sb.uid    = u.uid AND meta_sb.key    = 'scoreboard.member_id'
-         {$whereClause}
-         ORDER BY u.alias ASC
-         LIMIT :lim"
-    );
+    // LEFT JOIN bs_users_meta three times — once per meta key.
+    // IMPORTANT: `key` is a MySQL reserved word and MUST be backtick-quoted in all SQL.
+    $sql = "
+        SELECT
+            u.uid,
+            u.alias,
+            u.email,
+            meta_phone.value  AS phone,
+            meta_type.value   AS user_type,
+            meta_sb.value     AS scoreboard_member_id
+        FROM bs_users u
+        LEFT JOIN bs_users_meta meta_phone
+               ON meta_phone.uid = u.uid AND meta_phone.`key` = 'phone'
+        LEFT JOIN bs_users_meta meta_type
+               ON meta_type.uid  = u.uid AND meta_type.`key`  = 'ssa.user_type'
+        LEFT JOIN bs_users_meta meta_sb
+               ON meta_sb.uid    = u.uid AND meta_sb.`key`    = 'scoreboard.member_id'
+        {$whereClause}
+        ORDER BY u.alias ASC
+        LIMIT :lim
+    ";
+
+    $stmt = $pdo->prepare($sql);
 
     foreach ($params as $k => $v) {
         if (is_int($v)) {
             $stmt->bindValue($k, $v, PDO::PARAM_INT);
         } else {
-            $stmt->bindValue($k, $v);
+            $stmt->bindValue($k, $v, PDO::PARAM_STR);
         }
     }
     $stmt->bindValue('lim', $limit, PDO::PARAM_INT);
     $stmt->execute();
 
-    $rows  = $stmt->fetchAll();
-    $users = [];
+    $rows             = $stmt->fetchAll();
+    $scoreboardBase   = ssaApiGetScoreboardBaseUrl();
+    $users            = [];
 
     foreach ($rows as $row) {
-        $sbId = isset($row['scoreboard_member_id']) && $row['scoreboard_member_id'] !== ''
+        $sbId = (isset($row['scoreboard_member_id']) && $row['scoreboard_member_id'] !== '')
             ? (int)$row['scoreboard_member_id']
             : null;
 
+        $profilePhotoUrl = null;
+        if ($sbId !== null && $scoreboardBase !== null) {
+            $profilePhotoUrl = $scoreboardBase . '/api/player-photos/' . $sbId . '/processed';
+        }
+
         $users[] = [
-            'uid'               => (int)$row['uid'],
-            'alias'             => $row['alias'] !== '' ? $row['alias'] : null,
-            'email'             => $row['email'] !== '' ? $row['email'] : null,
-            'phone'             => $row['phone'] ?? null,
-            'userType'          => $row['user_type'] ?? 'member',
+            'uid'                => (int)$row['uid'],
+            'alias'              => (isset($row['alias']) && $row['alias'] !== '') ? $row['alias'] : null,
+            'email'              => (isset($row['email']) && $row['email'] !== '') ? $row['email'] : null,
+            'phone'              => $row['phone'] ?? null,
+            'userType'           => $row['user_type'] ?? 'member',
             'scoreboardMemberId' => $sbId,
+            'profilePhotoUrl'    => $profilePhotoUrl,
         ];
     }
 
@@ -117,6 +143,16 @@ try {
         'total'  => count($users),
     ]);
 } catch (Throwable $e) {
-    error_log('SSA admin/users.php failed: ' . $e->getMessage());
+    $sqlState = ($e instanceof \PDOException && is_array($e->errorInfo))
+        ? ($e->errorInfo[0] ?? 'unknown')
+        : 'n/a';
+
+    error_log(sprintf(
+        'SSA admin/users.php FAILED [%s] SQLSTATE=%s message=%s',
+        get_class($e),
+        $sqlState,
+        $e->getMessage()
+    ));
+
     ssaApiJsonResponse(500, ['error' => 'server_error', 'message' => 'Unable to list users.']);
 }
