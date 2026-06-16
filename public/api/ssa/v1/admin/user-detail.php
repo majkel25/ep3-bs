@@ -36,6 +36,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../_auth0.php';
 require_once __DIR__ . '/../_db.php';
 require_once __DIR__ . '/../_mail.php';
+require_once __DIR__ . '/../_user_notifications.php';
 
 $method = $_SERVER['REQUEST_METHOD'];
 
@@ -90,6 +91,94 @@ function ssaAdminFetchScoreboardMember(int $scoreboardMemberId): ?array
     return is_array($decoded) ? $decoded : null;
 }
 
+function ssaAdminEnsureAuditLogTable(PDO $pdo): void
+{
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS ssa_member_request_audit_log (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          request_id BIGINT UNSIGNED NOT NULL,
+          request_type VARCHAR(64) NOT NULL,
+          member_uid INT UNSIGNED NOT NULL,
+          member_name_snapshot VARCHAR(255) NULL,
+          previous_status VARCHAR(32) NOT NULL,
+          new_status VARCHAR(32) NOT NULL,
+          change_summary TEXT NOT NULL,
+          admin_uid INT UNSIGNED NOT NULL,
+          admin_name_snapshot VARCHAR(255) NULL,
+          admin_comment TEXT NULL,
+          actioned_at DATETIME NOT NULL,
+          effective_date DATETIME NULL,
+          PRIMARY KEY (id),
+          KEY idx_audit_request_id (request_id),
+          KEY idx_audit_member_uid (member_uid),
+          KEY idx_audit_admin_uid (admin_uid),
+          KEY idx_audit_actioned_at (actioned_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+}
+
+function ssaAdminFetchCurrentMembershipPlan(PDO $pdo, int $uid): ?array
+{
+    $stmt = $pdo->prepare(
+        'SELECT p.plan_key, p.name, p.display_name, p.monthly_price_pence, p.currency
+         FROM ssa_user_memberships m
+         INNER JOIN ssa_membership_plans p ON p.id = m.plan_id
+         WHERE m.uid = :uid AND m.status = :active
+         ORDER BY m.started_at DESC, m.id DESC
+         LIMIT 1'
+    );
+    $stmt->execute(['uid' => $uid, 'active' => 'active']);
+    $row = $stmt->fetch();
+
+    if (!$row) {
+        return null;
+    }
+
+    return [
+        'planKey'     => (string)$row['plan_key'],
+        'planName'    => (string)$row['name'],
+        'displayName' => $row['display_name'] !== null ? (string)$row['display_name'] : (string)$row['name'],
+        'pricePence'  => (int)$row['monthly_price_pence'],
+        'currency'    => (string)$row['currency'],
+    ];
+}
+
+function ssaAdminFetchAvailableMembershipPlans(PDO $pdo, ?string $currentPlanKey): array
+{
+    // Check if sort_order column exists.
+    $colStmt = $pdo->query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'ssa_membership_plans'
+           AND COLUMN_NAME = 'sort_order'"
+    );
+    $hasSortOrder = $colStmt->fetchColumn() !== false;
+    $orderBy      = $hasSortOrder ? 'ORDER BY sort_order ASC, id ASC' : 'ORDER BY id ASC';
+
+    $stmt = $pdo->query(
+        "SELECT plan_key, name, display_name, monthly_price_pence, currency
+         FROM ssa_membership_plans
+         WHERE is_active = 1 AND is_public = 1
+         {$orderBy}"
+    );
+    $rows  = $stmt->fetchAll();
+    $plans = [];
+
+    foreach ($rows as $row) {
+        $planKey   = (string)$row['plan_key'];
+        $plans[] = [
+            'planKey'     => $planKey,
+            'name'        => (string)$row['name'],
+            'displayName' => $row['display_name'] !== null ? (string)$row['display_name'] : (string)$row['name'],
+            'pricePence'  => (int)$row['monthly_price_pence'],
+            'currency'    => (string)$row['currency'],
+            'isCurrent'   => $currentPlanKey !== null && $planKey === $currentPlanKey,
+        ];
+    }
+
+    return $plans;
+}
+
 function ssaAdminBuildUserDetail(PDO $pdo, array $userRow, int $callerUid): array
 {
     $uid      = (int)$userRow['uid'];
@@ -130,26 +219,32 @@ function ssaAdminBuildUserDetail(PDO $pdo, array $userRow, int $callerUid): arra
 
     $hasProfilePhoto = $profilePhotoUrl !== null;
 
+    $currentMembershipPlan    = ssaAdminFetchCurrentMembershipPlan($pdo, $uid);
+    $currentPlanKey           = $currentMembershipPlan !== null ? $currentMembershipPlan['planKey'] : null;
+    $availableMembershipPlans = ssaAdminFetchAvailableMembershipPlans($pdo, $currentPlanKey);
+
     return [
-        'uid'                 => $uid,
-        'fullName'            => $fullName,
-        'email'               => $email,
-        'phone'               => $phone,
-        'userType'            => $userType,
-        'accountStatus'       => $status,
-        'accountStatusLabel'  => $statusLabel,
-        'scoreboardMemberId'  => $scoreboardMemberId,
-        'scoreboardMemberName' => $scoreboardMemberName,
-        'scoreboardMemberRef'  => $scoreboardMemberRef,
-        'profilePhotoUrl'     => $profilePhotoUrl,
-        'hasProfilePhoto'     => $hasProfilePhoto,
-        'emailChangeSupported' => false,
-        'profileCompleteness' => [
+        'uid'                      => $uid,
+        'fullName'                 => $fullName,
+        'email'                    => $email,
+        'phone'                    => $phone,
+        'userType'                 => $userType,
+        'accountStatus'            => $status,
+        'accountStatusLabel'       => $statusLabel,
+        'scoreboardMemberId'       => $scoreboardMemberId,
+        'scoreboardMemberName'     => $scoreboardMemberName,
+        'scoreboardMemberRef'      => $scoreboardMemberRef,
+        'profilePhotoUrl'          => $profilePhotoUrl,
+        'hasProfilePhoto'          => $hasProfilePhoto,
+        'emailChangeSupported'     => false,
+        'profileCompleteness'      => [
             'hasPhone'             => $phone !== null,
             'hasEmail'             => $email !== null,
             'hasScoreboardMapping' => $scoreboardMemberId !== null,
             'hasProfilePhoto'      => $hasProfilePhoto,
         ],
+        'currentMembershipPlan'    => $currentMembershipPlan,
+        'availableMembershipPlans' => $availableMembershipPlans,
     ];
 }
 
@@ -292,6 +387,66 @@ try {
         }
     }
 
+    // Handle membershipPlanKey change (admin direct change).
+    $newMembershipPlanKey = null;
+    $membershipChangeMeta = null; // holds ['oldPlan', 'newPlan', 'newPlanId', 'newPlanName']
+
+    if (array_key_exists('membershipPlanKey', $body)) {
+        $rawPlanKey = trim((string)($body['membershipPlanKey'] ?? ''));
+
+        if ($rawPlanKey === '') {
+            ssaApiJsonResponse(400, ['error' => 'invalid_membership_plan_key', 'message' => 'membershipPlanKey cannot be empty.']);
+        }
+
+        // Validate plan exists and is active.
+        $planCheckStmt = $pdo->prepare(
+            'SELECT id, plan_key, name, display_name, monthly_price_pence, currency
+             FROM ssa_membership_plans
+             WHERE plan_key = :planKey AND is_active = 1
+             LIMIT 1'
+        );
+        $planCheckStmt->execute(['planKey' => $rawPlanKey]);
+        $newPlanRow = $planCheckStmt->fetch();
+
+        if (!$newPlanRow) {
+            ssaApiJsonResponse(400, [
+                'error'   => 'membership_plan_not_found',
+                'message' => 'The specified membership plan does not exist or is inactive.',
+            ]);
+        }
+
+        // Check if member already has this plan active.
+        $curPlanStmt = $pdo->prepare(
+            'SELECT m.id AS membership_id, p.plan_key, p.name AS plan_name, p.display_name
+             FROM ssa_user_memberships m
+             INNER JOIN ssa_membership_plans p ON p.id = m.plan_id
+             WHERE m.uid = :uid AND m.status = :active
+             ORDER BY m.started_at DESC, m.id DESC
+             LIMIT 1'
+        );
+        $curPlanStmt->execute(['uid' => $targetUid, 'active' => 'active']);
+        $curPlanRow = $curPlanStmt->fetch();
+
+        $currentlyOnThisPlan = $curPlanRow && (string)$curPlanRow['plan_key'] === $rawPlanKey;
+
+        if ($currentlyOnThisPlan) {
+            $detail = ssaAdminBuildUserDetail($pdo, $userRow, $callerUid);
+            ssaApiJsonResponse(200, array_merge(['status' => 'ok', 'message' => 'Already on that plan.'], $detail));
+        }
+
+        $newMembershipPlanKey = $rawPlanKey;
+        $membershipChangeMeta = [
+            'oldPlanName' => $curPlanRow
+                ? (string)($curPlanRow['display_name'] ?? $curPlanRow['plan_name'] ?? 'Unknown')
+                : 'None',
+            'newPlanId'   => (int)$newPlanRow['id'],
+            'newPlanName' => (string)($newPlanRow['display_name'] ?? $newPlanRow['name']),
+            'newPricePence' => (int)$newPlanRow['monthly_price_pence'],
+            'newCurrency'   => (string)$newPlanRow['currency'],
+        ];
+        $changedFields[] = 'membershipPlanKey';
+    }
+
     if (empty($changedFields)) {
         $detail = ssaAdminBuildUserDetail($pdo, $userRow, $callerUid);
         ssaApiJsonResponse(200, array_merge(['status' => 'ok', 'message' => 'No changes detected.'], $detail));
@@ -338,6 +493,135 @@ try {
         $userRow['alias'] = $newFullName;
     }
 
+    // Apply membershipPlanKey (admin direct change) in a transaction.
+    if ($newMembershipPlanKey !== null && $membershipChangeMeta !== null) {
+        $pdo->beginTransaction();
+        try {
+            // Cancel any current active membership.
+            $pdo->prepare(
+                'UPDATE ssa_user_memberships
+                 SET status = :cancelled, cancelled_at = UTC_TIMESTAMP()
+                 WHERE uid = :uid AND status = :active'
+            )->execute(['cancelled' => 'cancelled', 'uid' => $targetUid, 'active' => 'active']);
+
+            // Insert new membership.
+            $pdo->prepare(
+                'INSERT INTO ssa_user_memberships
+                    (uid, plan_id, status, started_at, price_snapshot_pence, currency_snapshot, plan_name_snapshot)
+                 SELECT :uid, id, :active, UTC_TIMESTAMP(), monthly_price_pence, currency, COALESCE(display_name, name)
+                 FROM ssa_membership_plans
+                 WHERE id = :planId'
+            )->execute([
+                'uid'    => $targetUid,
+                'active' => 'active',
+                'planId' => $membershipChangeMeta['newPlanId'],
+            ]);
+
+            $pdo->commit();
+        } catch (Throwable $memTxEx) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $memTxEx;
+        }
+
+        // Audit log (non-fatal).
+        try {
+            ssaAdminEnsureAuditLogTable($pdo);
+
+            $callerNameStmt = $pdo->prepare('SELECT alias FROM bs_users WHERE uid = :uid LIMIT 1');
+            $callerNameStmt->execute(['uid' => $callerUid]);
+            $callerRow   = $callerNameStmt->fetch();
+            $callerAlias = $callerRow ? (string)($callerRow['alias'] ?? '') : '';
+
+            $memberAlias = isset($userRow['alias']) ? (string)$userRow['alias'] : '';
+
+            $changeSummary = 'Admin changed membership from '
+                . $membershipChangeMeta['oldPlanName']
+                . ' to ' . $membershipChangeMeta['newPlanName'];
+
+            $pdo->prepare(
+                'INSERT INTO ssa_member_request_audit_log
+                    (request_id, request_type, member_uid, member_name_snapshot,
+                     previous_status, new_status, change_summary,
+                     admin_uid, admin_name_snapshot, admin_comment, actioned_at, effective_date)
+                 VALUES
+                    (0, :requestType, :memberUid, :memberName,
+                     :previousStatus, :newStatus, :changeSummary,
+                     :adminUid, :adminName, NULL, UTC_TIMESTAMP(), UTC_TIMESTAMP())'
+            )->execute([
+                'requestType'    => 'direct_admin_change',
+                'memberUid'      => $targetUid,
+                'memberName'     => $memberAlias !== '' ? $memberAlias : null,
+                'previousStatus' => 'active',
+                'newStatus'      => 'active',
+                'changeSummary'  => $changeSummary,
+                'adminUid'       => $callerUid,
+                'adminName'      => $callerAlias !== '' ? $callerAlias : null,
+            ]);
+        } catch (Throwable $auditEx) {
+            error_log('SSA admin/user-detail.php: membership audit log failed: ' . $auditEx->getMessage());
+        }
+
+        // In-app notification for member (non-fatal).
+        try {
+            ssaUserNotificationsEnsureTable($pdo);
+
+            ssaUserNotificationsCreate(
+                $pdo,
+                $targetUid,
+                'membership_updated_by_admin',
+                'Membership updated',
+                'Your membership has been changed to '
+                    . $membershipChangeMeta['newPlanName']
+                    . ' by an administrator. The new rate starts pro-rata from today.',
+                'membership',
+                null
+            );
+        } catch (Throwable $memNotifEx) {
+            error_log('SSA admin/user-detail.php: member membership notification failed: ' . $memNotifEx->getMessage());
+        }
+
+        // In-app notifications for other admins (non-fatal).
+        try {
+            $callerNameStmt2 = $pdo->prepare('SELECT alias FROM bs_users WHERE uid = :uid LIMIT 1');
+            $callerNameStmt2->execute(['uid' => $callerUid]);
+            $callerRow2   = $callerNameStmt2->fetch();
+            $callerAlias2 = $callerRow2 ? (string)($callerRow2['alias'] ?? '') : '';
+
+            $memberAlias2 = isset($userRow['alias']) ? (string)$userRow['alias'] : 'Member';
+
+            $adminListStmt = $pdo->prepare(
+                "SELECT DISTINCT u.uid
+                 FROM bs_users u
+                 INNER JOIN bs_users_meta m ON m.uid = u.uid AND m.`key` = 'ssa.user_type'
+                 WHERE m.value IN ('admin', 'club_owner')
+                   AND u.uid != :callerUid"
+            );
+            $adminListStmt->execute(['callerUid' => $callerUid]);
+            $otherAdminUids = $adminListStmt->fetchAll(PDO::FETCH_COLUMN);
+
+            foreach ($otherAdminUids as $adminUid) {
+                try {
+                    ssaUserNotificationsCreate(
+                        $pdo,
+                        (int)$adminUid,
+                        'admin_membership_updated',
+                        'Membership updated by admin',
+                        $callerAlias2 . ' changed ' . $memberAlias2 . '\'s membership to '
+                            . $membershipChangeMeta['newPlanName'] . '.',
+                        'admin_member_requests',
+                        null
+                    );
+                } catch (Throwable $adminMemNotifEx) {
+                    error_log('SSA admin/user-detail.php: other admin membership notification failed for uid=' . $adminUid . ': ' . $adminMemNotifEx->getMessage());
+                }
+            }
+        } catch (Throwable $adminMemListEx) {
+            error_log('SSA admin/user-detail.php: admin list membership notification failed: ' . $adminMemListEx->getMessage());
+        }
+    }
+
     // Send notification email (non-fatal).
     if ($currentEmail !== '' && !empty($changedFields)) {
         try {
@@ -353,6 +637,9 @@ try {
             if (in_array('accountStatus', $changedFields, true)) {
                 $statusLabelMap = ['enabled' => 'Active', 'disabled' => 'Disabled'];
                 $lines[] = '  Account status: ' . ($statusLabelMap[$newStatus] ?? $newStatus);
+            }
+            if (in_array('membershipPlanKey', $changedFields, true) && $membershipChangeMeta !== null) {
+                $lines[] = '  Membership plan: ' . $membershipChangeMeta['newPlanName'];
             }
 
             $lines[] = "\nIf you did not authorise this change, please contact Surrey Snooker Academy.";
