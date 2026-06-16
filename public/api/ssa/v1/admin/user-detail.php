@@ -72,7 +72,9 @@ function ssaAdminFetchScoreboardMember(int $scoreboardMemberId): ?array
         CURLOPT_HTTPHEADER     => ['X-Internal-Api-Key: ' . $apiKey, 'Accept: application/json'],
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 5,
+        CURLOPT_TIMEOUT_MS     => 5000,
         CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_NOSIGNAL       => 1, // required for PHP-FPM
     ]);
 
     $body    = curl_exec($ch);

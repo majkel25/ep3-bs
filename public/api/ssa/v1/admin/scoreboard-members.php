@@ -77,25 +77,41 @@ try {
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
-        CURLOPT_HTTPHEADER     => ['X-Internal-Api-Key: ' . $apiKey, 'Accept: application/json'],
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 10,
-        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_HTTPHEADER      => ['X-Internal-Api-Key: ' . $apiKey, 'Accept: application/json'],
+        CURLOPT_RETURNTRANSFER  => true,
+        CURLOPT_TIMEOUT         => 8,
+        CURLOPT_TIMEOUT_MS      => 8000,
+        CURLOPT_CONNECTTIMEOUT  => 3,
+        CURLOPT_NOSIGNAL        => 1, // required for PHP-FPM: disables SIGALRM-based timeouts
     ]);
 
-    $body     = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlErr  = curl_error($ch);
+    $body      = curl_exec($ch);
+    $httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlErr   = curl_error($ch);
+    $curlErrno = curl_errno($ch);
     curl_close($ch);
 
+    if ($curlErrno === CURLE_OPERATION_TIMEDOUT || $curlErrno === CURLE_COULDNT_CONNECT) {
+        error_log(sprintf(
+            'SSA admin/scoreboard-members: scoreboard timeout/connection-refused (errno=%d) url_path=/api/internal/members',
+            $curlErrno
+        ));
+        ssaApiJsonResponse(504, ['error' => 'scoreboard_lookup_timeout', 'message' => 'Scoreboard lookup timed out. Please try again.']);
+    }
+
     if ($curlErr !== '' || $body === false) {
-        error_log('SSA admin/scoreboard-members: curl error: ' . $curlErr);
+        error_log(sprintf('SSA admin/scoreboard-members: curl error errno=%d: %s', $curlErrno, $curlErr));
         ssaApiJsonResponse(502, ['error' => 'scoreboard_unreachable', 'message' => 'Scoreboard is not reachable.']);
     }
 
     if ($httpCode === 401 || $httpCode === 403) {
         error_log('SSA admin/scoreboard-members: scoreboard rejected internal key (HTTP ' . $httpCode . ')');
         ssaApiJsonResponse(503, ['error' => 'scoreboard_auth_failed', 'message' => 'Scoreboard integration error.']);
+    }
+
+    if ($httpCode === 404) {
+        error_log('SSA admin/scoreboard-members: scoreboard /api/internal/members not found – endpoint may not be deployed yet');
+        ssaApiJsonResponse(503, ['error' => 'scoreboard_endpoint_unavailable', 'message' => 'Scoreboard member lookup is not yet available.']);
     }
 
     if ($httpCode !== 200) {

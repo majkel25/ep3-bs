@@ -150,12 +150,15 @@ curl_setopt_array($ch, [
     CURLOPT_HTTPHEADER     => ['X-Internal-Api-Key: ' . $internalApiKey, 'Accept: application/json'],
     CURLOPT_RETURNTRANSFER => true,
     CURLOPT_TIMEOUT        => 30,
+    CURLOPT_TIMEOUT_MS     => 30000,
     CURLOPT_CONNECTTIMEOUT => 10,
+    CURLOPT_NOSIGNAL       => 1, // required for PHP-FPM
 ]);
 
 $responseBody = curl_exec($ch);
 $httpCode     = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlError    = curl_error($ch);
+$curlErrno    = curl_errno($ch);
 curl_close($ch);
 
 if ($curlError !== '') {
