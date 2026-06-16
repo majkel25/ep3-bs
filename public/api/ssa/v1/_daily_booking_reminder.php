@@ -29,11 +29,12 @@ function ssaDailyBookingReminderEnsureLocalTimeGuard(DateTimeImmutable $now, boo
         return;
     }
 
-    if ($currentHour < 6 || $currentHour > 11) {
+    $localHour = (int)$now->format('H');
+    if ($localHour < 6 || $localHour >= 22) {
         throw new RuntimeException(
-            'Outside daily booking reminder window. Local time is ' .
-            $now->format('Y-m-d H:i:s T') .
-            '; expected Europe/London hour 08. Use force=true for manual testing.'
+            'Outside daily booking reminder window (06:00-22:00 Europe/London). ' .
+            'Local time is ' . $now->format('Y-m-d H:i:s T') . '. ' .
+            'Use force=true for manual testing.'
         );
     }
 }
@@ -381,13 +382,15 @@ function ssaDailyBookingReminderRun(PDO $pdo, DateTimeImmutable $now, array $opt
     $uid = isset($options['uid']) && $options['uid'] !== null ? (int)$options['uid'] : null;
     $force = (bool)($options['force'] ?? false);
 
-    if (!$force && $now->format('H') !== '08') {
+    $localHour = (int)$now->format('H');
+    if (!$force && ($localHour < 6 || $localHour >= 22)) {
         return [
             'status' => 'skipped',
             'skippedReason' => 'outside_reminder_window',
             'localTime' => $now->format('Y-m-d H:i:s T'),
             'timezone' => SSA_API_TIMEZONE,
-            'message' => 'Outside daily booking reminder window. Expected Europe/London hour 08. Use force=true for manual testing.',
+            'allowedWindow' => '06:00-22:00 Europe/London',
+            'message' => 'Outside daily booking reminder window (06:00-22:00 Europe/London). Use force=true for manual testing.',
         ];
     }
 
