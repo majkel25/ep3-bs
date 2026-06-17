@@ -169,6 +169,13 @@ try {
     // -------------------------------------------------------------------------
     // Available plans (active + public, with benefits)
     // -------------------------------------------------------------------------
+    // Catalogue: public plans only. A member's own private plan is returned via
+    // currentMembership (direct JOIN on plan_id, no is_public filter) not via this catalogue.
+    // Rule A (private plan visibility): satisfied by the INNER JOIN above in $activeMembershipStmt —
+    //   that query joins ssa_membership_plans without an is_public filter, so a member whose
+    //   active membership uses a private plan (e.g. RED_JUNIOR) will still see their plan
+    //   details in currentMembership.planKey, .displayName, etc.
+    // Rule B (catalogue never exposes private plans): enforced by is_public = 1 below.
     $plansStmt = $pdo->query(
         'SELECT id, plan_key, name, display_name, description,
                 monthly_price_pence, currency,

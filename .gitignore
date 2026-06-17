@@ -11,3 +11,12 @@ Thumbs.db
 
 .DS_Store
 /.vs
+
+# Import artefacts — never commit
+scripts/vendor/
+scripts/composer.lock
+*.xlsx
+*.xls
+/scripts/*.json.out
+/scripts/*.csv.out
+/scripts/reconciliation-*.txt
