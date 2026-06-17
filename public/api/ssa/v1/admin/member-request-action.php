@@ -253,10 +253,18 @@ try {
                     $targetPlanId = isset($payload['targetPlanId']) ? (int)$payload['targetPlanId'] : null;
 
                     if ($targetPlanId !== null && $targetPlanId > 0) {
-                        // Verify plan exists.
-                        $planCheck = $pdo->prepare('SELECT id FROM ssa_membership_plans WHERE id = :planId LIMIT 1');
-                        $planCheck->execute(['planId' => $targetPlanId]);
-                        if (!$planCheck->fetch()) {
+                        // Load plan and capture snapshot fields.
+                        $planFetch = $pdo->prepare(
+                            'SELECT id, monthly_price_pence, currency,
+                                    COALESCE(display_name, name) AS plan_name_snapshot
+                             FROM ssa_membership_plans
+                             WHERE id = :planId AND is_active = 1
+                             LIMIT 1'
+                        );
+                        $planFetch->execute(['planId' => $targetPlanId]);
+                        $planRow = $planFetch->fetch();
+
+                        if (!$planRow) {
                             $pdo->rollBack();
                             ssaApiJsonResponse(400, [
                                 'error'   => 'invalid_membership_plan',
@@ -264,25 +272,55 @@ try {
                             ]);
                         }
 
-                        // End all current active memberships for this user (set ended_at to today).
-                        $pdo->prepare(
-                            'UPDATE ssa_user_memberships
-                             SET ended_at = CURDATE()
-                             WHERE uid = :uid AND ended_at IS NULL'
-                        )->execute([
-                            'uid' => $memberUid,
-                        ]);
+                        // Lock the current active row so nothing races between supersede and insert.
+                        $curMembershipStmt = $pdo->prepare(
+                            'SELECT id FROM ssa_user_memberships
+                             WHERE uid = :uid AND status = :active
+                             ORDER BY started_at DESC, id DESC
+                             LIMIT 1
+                             FOR UPDATE'
+                        );
+                        $curMembershipStmt->execute(['uid' => $memberUid, 'active' => 'active']);
+                        $curMembership   = $curMembershipStmt->fetch();
+                        $oldMembershipId = $curMembership ? (int)$curMembership['id'] : null;
 
-                        // Insert new membership with today as started_at.
+                        // Supersede old row first – clears any unique constraint on active_uid.
+                        if ($oldMembershipId !== null) {
+                            $pdo->prepare(
+                                'UPDATE ssa_user_memberships
+                                 SET status = :superseded, updated_at = UTC_TIMESTAMP()
+                                 WHERE id = :id'
+                            )->execute(['superseded' => 'superseded', 'id' => $oldMembershipId]);
+                        }
+
+                        // Insert new active membership with confirmed schema columns.
                         $pdo->prepare(
                             'INSERT INTO ssa_user_memberships
-                                (uid, plan_id, started_at, ended_at, notes)
-                             VALUES (:uid, :planId, CURDATE(), NULL, :notes)'
+                                (uid, plan_id, status, started_at, source,
+                                 price_snapshot_pence, currency_snapshot, plan_name_snapshot, notes)
+                             VALUES (:uid, :planId, :active, UTC_TIMESTAMP(), :source,
+                                     :pricePence, :currency, :planName, :notes)'
                         )->execute([
-                            'uid'    => $memberUid,
-                            'planId' => $targetPlanId,
-                            'notes'  => 'Admin-approved membership change',
+                            'uid'        => $memberUid,
+                            'planId'     => $targetPlanId,
+                            'active'     => 'active',
+                            'source'     => 'admin',
+                            'pricePence' => (int)$planRow['monthly_price_pence'],
+                            'currency'   => (string)$planRow['currency'],
+                            'planName'   => (string)$planRow['plan_name_snapshot'],
+                            'notes'      => 'Admin-approved membership change (request #' . $requestId . ')',
                         ]);
+
+                        $newMembershipId = (int)$pdo->lastInsertId();
+
+                        // Back-fill the link from old row to new row.
+                        if ($oldMembershipId !== null && $newMembershipId > 0) {
+                            $pdo->prepare(
+                                'UPDATE ssa_user_memberships
+                                 SET superseded_by_membership_id = :newId
+                                 WHERE id = :oldId'
+                            )->execute(['newId' => $newMembershipId, 'oldId' => $oldMembershipId]);
+                        }
                     }
                     break;
 
@@ -316,13 +354,17 @@ try {
                     break;
 
                 case 'membership_cancellation':
-                    // End the current active membership (set ended_at to today).
                     $pdo->prepare(
                         'UPDATE ssa_user_memberships
-                         SET ended_at = CURDATE()
-                         WHERE uid = :uid AND ended_at IS NULL'
+                         SET status                    = :cancelled,
+                             cancelled_at              = UTC_TIMESTAMP(),
+                             cancellation_effective_at = UTC_TIMESTAMP(),
+                             updated_at                = UTC_TIMESTAMP()
+                         WHERE uid = :uid AND status = :active'
                     )->execute([
-                        'uid' => $memberUid,
+                        'cancelled' => 'cancelled',
+                        'uid'       => $memberUid,
+                        'active'    => 'active',
                     ]);
                     break;
             }
