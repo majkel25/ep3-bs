@@ -498,6 +498,7 @@ try {
         $pdo->beginTransaction();
         try {
             // Cancel any current active membership.
+            // active_uid is STORED GENERATED — setting status clears it automatically.
             $pdo->prepare(
                 'UPDATE ssa_user_memberships
                  SET status = :cancelled, cancelled_at = UTC_TIMESTAMP()
@@ -505,10 +506,22 @@ try {
             )->execute(['cancelled' => 'cancelled', 'uid' => $targetUid, 'active' => 'active']);
 
             // Insert new membership.
+            // current_period_starts_at / current_period_ends_at / cancellation_notice_deadline_at
+            // are NOT NULL with no schema default and must always be supplied.
+            // For a direct admin plan change the new billing period starts today; deadline is
+            // one day before the period ends (mirrors existing active-row convention).
             $pdo->prepare(
                 'INSERT INTO ssa_user_memberships
-                    (uid, plan_id, status, started_at, price_snapshot_pence, currency_snapshot, plan_name_snapshot)
-                 SELECT :uid, id, :active, UTC_TIMESTAMP(), monthly_price_pence, currency, COALESCE(display_name, name)
+                    (uid, plan_id, status, started_at,
+                     current_period_starts_at,
+                     current_period_ends_at,
+                     cancellation_notice_deadline_at,
+                     price_snapshot_pence, currency_snapshot, plan_name_snapshot)
+                 SELECT :uid, id, :active, UTC_TIMESTAMP(),
+                        UTC_TIMESTAMP(),
+                        DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 MONTH),
+                        DATE_ADD(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 MONTH), INTERVAL -1 DAY),
+                        monthly_price_pence, currency, COALESCE(display_name, name)
                  FROM ssa_membership_plans
                  WHERE id = :planId'
             )->execute([

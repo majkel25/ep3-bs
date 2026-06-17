@@ -272,9 +272,15 @@ try {
                             ]);
                         }
 
-                        // Lock the current active row so nothing races between supersede and insert.
+                        // Lock current active row and read all required period fields.
+                        // current_period_ends_at / cancellation_notice_deadline_at are NOT NULL
+                        // in the production schema and have no defaults – they must be inherited
+                        // from the old row (pro-rata plan change preserves the billing period).
                         $curMembershipStmt = $pdo->prepare(
-                            'SELECT id FROM ssa_user_memberships
+                            'SELECT id,
+                                    current_period_ends_at,
+                                    cancellation_notice_deadline_at
+                             FROM ssa_user_memberships
                              WHERE uid = :uid AND status = :active
                              ORDER BY started_at DESC, id DESC
                              LIMIT 1
@@ -284,31 +290,71 @@ try {
                         $curMembership   = $curMembershipStmt->fetch();
                         $oldMembershipId = $curMembership ? (int)$curMembership['id'] : null;
 
-                        // Supersede old row first – clears any unique constraint on active_uid.
+                        $oldPeriodEndsAt   = $curMembership['current_period_ends_at']      ?? null;
+                        $oldCancelDeadline = $curMembership['cancellation_notice_deadline_at'] ?? null;
+
+                        // Both period columns are NOT NULL in the schema.
+                        // Return a clean error if the existing active membership is malformed.
+                        if ($oldPeriodEndsAt === null || $oldPeriodEndsAt === '') {
+                            $pdo->rollBack();
+                            ssaApiJsonResponse(400, [
+                                'error'   => 'membership_period_invalid',
+                                'message' => 'The current membership billing period could not be determined.',
+                            ]);
+                        }
+                        if ($oldCancelDeadline === null || $oldCancelDeadline === '') {
+                            $pdo->rollBack();
+                            ssaApiJsonResponse(400, [
+                                'error'   => 'membership_period_invalid',
+                                'message' => 'The current membership billing period could not be determined.',
+                            ]);
+                        }
+
+                        // Supersede old row first so the STORED GENERATED active_uid column
+                        // becomes NULL and the unique constraint is released before the new
+                        // active row is inserted.
                         if ($oldMembershipId !== null) {
                             $pdo->prepare(
                                 'UPDATE ssa_user_memberships
-                                 SET status = :superseded, updated_at = UTC_TIMESTAMP()
+                                 SET status = :superseded
                                  WHERE id = :id'
                             )->execute(['superseded' => 'superseded', 'id' => $oldMembershipId]);
                         }
 
-                        // Insert new active membership with confirmed schema columns.
+                        // Insert new active membership.
+                        // Confirmed NOT NULL / no-default columns that must be supplied:
+                        //   started_at, current_period_starts_at, current_period_ends_at,
+                        //   cancellation_notice_deadline_at, plan_name_snapshot.
+                        // active_uid is STORED GENERATED – never set it manually.
+                        // created_at / updated_at default to CURRENT_TIMESTAMP.
                         $pdo->prepare(
                             'INSERT INTO ssa_user_memberships
-                                (uid, plan_id, status, started_at, source,
-                                 price_snapshot_pence, currency_snapshot, plan_name_snapshot, notes)
-                             VALUES (:uid, :planId, :active, UTC_TIMESTAMP(), :source,
-                                     :pricePence, :currency, :planName, :notes)'
+                                (uid, plan_id, status, started_at,
+                                 current_period_starts_at,
+                                 current_period_ends_at,
+                                 cancellation_notice_deadline_at,
+                                 source,
+                                 price_snapshot_pence, currency_snapshot, plan_name_snapshot,
+                                 notes)
+                             VALUES
+                                (:uid, :planId, :active, UTC_TIMESTAMP(),
+                                 UTC_TIMESTAMP(),
+                                 :periodEndsAt,
+                                 :cancelDeadline,
+                                 :source,
+                                 :pricePence, :currency, :planName,
+                                 :notes)'
                         )->execute([
-                            'uid'        => $memberUid,
-                            'planId'     => $targetPlanId,
-                            'active'     => 'active',
-                            'source'     => 'admin',
-                            'pricePence' => (int)$planRow['monthly_price_pence'],
-                            'currency'   => (string)$planRow['currency'],
-                            'planName'   => (string)$planRow['plan_name_snapshot'],
-                            'notes'      => 'Admin-approved membership change (request #' . $requestId . ')',
+                            'uid'           => $memberUid,
+                            'planId'        => $targetPlanId,
+                            'active'        => 'active',
+                            'periodEndsAt'  => $oldPeriodEndsAt,
+                            'cancelDeadline'=> $oldCancelDeadline,
+                            'source'        => 'admin',
+                            'pricePence'    => (int)$planRow['monthly_price_pence'],
+                            'currency'      => (string)$planRow['currency'],
+                            'planName'      => (string)$planRow['plan_name_snapshot'],
+                            'notes'         => 'Admin-approved membership change (request #' . $requestId . ')',
                         ]);
 
                         $newMembershipId = (int)$pdo->lastInsertId();
