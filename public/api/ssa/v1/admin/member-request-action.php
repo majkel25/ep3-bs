@@ -36,24 +36,47 @@ if ($auth0Sub === '') {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-if (!function_exists('ssaAdminRequestsEnsureColumns')) {
-    function ssaAdminRequestsEnsureColumns(PDO $pdo): void
-    {
-        $stmt = $pdo->query(
-            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_admin_requests'"
-        );
-        $cols = array_map('strtolower', $stmt->fetchAll(PDO::FETCH_COLUMN));
+function ssaActionEnsureAdminRequestsTable(PDO $pdo): void
+{
+    // Creates ssa_admin_requests if it doesn't exist, then idempotently adds
+    // the admin-action columns introduced by this endpoint.
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS ssa_admin_requests (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          uid INT UNSIGNED NOT NULL,
+          auth0_sub VARCHAR(128) NOT NULL,
+          request_type VARCHAR(64) NOT NULL,
+          status VARCHAR(32) NOT NULL DEFAULT 'pending',
+          target_key VARCHAR(128) NULL,
+          target_id INT UNSIGNED NULL,
+          payload_json JSON NULL,
+          requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          actioned_at DATETIME NULL,
+          actioned_by_uid INT UNSIGNED NULL,
+          admin_comment TEXT NULL,
+          PRIMARY KEY (id),
+          KEY idx_ssa_admin_requests_uid (uid),
+          KEY idx_ssa_admin_requests_status (status),
+          KEY idx_ssa_admin_requests_type (request_type),
+          KEY idx_ssa_admin_requests_requested_at (requested_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
 
-        if (!in_array('actioned_at', $cols, true)) {
-            $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN actioned_at DATETIME NULL');
-        }
-        if (!in_array('actioned_by_uid', $cols, true)) {
-            $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN actioned_by_uid INT NULL');
-        }
-        if (!in_array('admin_comment', $cols, true)) {
-            $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN admin_comment TEXT NULL');
-        }
+    // Idempotently add columns for existing tables that pre-date this endpoint.
+    $stmt = $pdo->query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_admin_requests'"
+    );
+    $cols = array_map('strtolower', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+    if (!in_array('actioned_at', $cols, true)) {
+        $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN actioned_at DATETIME NULL');
+    }
+    if (!in_array('actioned_by_uid', $cols, true)) {
+        $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN actioned_by_uid INT UNSIGNED NULL');
+    }
+    if (!in_array('admin_comment', $cols, true)) {
+        $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN admin_comment TEXT NULL');
     }
 }
 
@@ -74,6 +97,7 @@ function ssaActionEnsureAuditLogTable(PDO $pdo): void
           admin_comment TEXT NULL,
           actioned_at DATETIME NOT NULL,
           effective_date DATETIME NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (id),
           KEY idx_audit_request_id (request_id),
           KEY idx_audit_member_uid (member_uid),
@@ -138,8 +162,8 @@ try {
         ssaApiJsonResponse(403, ['error' => 'forbidden', 'message' => 'Admin or Owner access required.']);
     }
 
-    // Idempotent column migration.
-    ssaAdminRequestsEnsureColumns($pdo);
+    // Ensure ssa_admin_requests table and required columns exist.
+    ssaActionEnsureAdminRequestsTable($pdo);
 
     // Parse body.
     $rawBody = (string)file_get_contents('php://input');
@@ -165,7 +189,7 @@ try {
 
     if ($action === 'decline' && $adminComment === '') {
         ssaApiJsonResponse(400, [
-            'error'   => 'admin_comment_required',
+            'error'   => 'decline_comment_required',
             'message' => 'adminComment is required when declining a request.',
         ]);
     }
@@ -181,7 +205,7 @@ try {
     $pdo->beginTransaction();
 
     try {
-        // Lock and fetch the request inside transaction.
+        // Fetch and lock the request.
         $reqStmt = $pdo->prepare(
             'SELECT r.id, r.uid AS member_uid, r.request_type, r.status, r.payload_json,
                     u.alias AS member_name, u.email AS member_email
@@ -209,7 +233,6 @@ try {
         $memberUid   = (int)$request['member_uid'];
         $requestType = (string)$request['request_type'];
         $memberName  = (string)($request['member_name'] ?? '');
-        $memberEmail = (string)($request['member_email'] ?? '');
 
         $payload = [];
         if (isset($request['payload_json']) && $request['payload_json'] !== null && $request['payload_json'] !== '') {
@@ -227,61 +250,44 @@ try {
 
             switch ($requestType) {
                 case 'membership_change':
-                    $currentMembershipId = isset($payload['currentMembershipId']) ? (int)$payload['currentMembershipId'] : null;
-                    $targetPlanId        = isset($payload['targetPlanId'])        ? (int)$payload['targetPlanId']        : null;
+                    $targetPlanId = isset($payload['targetPlanId']) ? (int)$payload['targetPlanId'] : null;
 
-                    if ($currentMembershipId !== null) {
-                        $cancelStmt = $pdo->prepare(
+                    if ($targetPlanId !== null && $targetPlanId > 0) {
+                        // Cancel all current active memberships for this user.
+                        $pdo->prepare(
                             'UPDATE ssa_user_memberships
                              SET status = :cancelled, cancelled_at = UTC_TIMESTAMP()
-                             WHERE id = :id AND uid = :uid AND status = :active'
-                        );
-                        $cancelStmt->execute([
+                             WHERE uid = :uid AND status = :active'
+                        )->execute([
                             'cancelled' => 'cancelled',
-                            'id'        => $currentMembershipId,
                             'uid'       => $memberUid,
                             'active'    => 'active',
                         ]);
-                    }
 
-                    if ($targetPlanId !== null) {
-                        // Fetch plan details.
-                        $planStmt = $pdo->prepare(
-                            'SELECT monthly_price_pence, currency, COALESCE(display_name, name) AS plan_name
-                             FROM ssa_membership_plans WHERE id = :id LIMIT 1'
-                        );
-                        $planStmt->execute(['id' => $targetPlanId]);
-                        $planRow = $planStmt->fetch();
-
-                        if ($planRow) {
-                            $insStmt = $pdo->prepare(
-                                'INSERT INTO ssa_user_memberships
-                                    (uid, plan_id, status, started_at, price_snapshot_pence, currency_snapshot, plan_name_snapshot)
-                                 VALUES
-                                    (:uid, :planId, :active, UTC_TIMESTAMP(), :pricePence, :currency, :planName)'
-                            );
-                            $insStmt->execute([
-                                'uid'        => $memberUid,
-                                'planId'     => $targetPlanId,
-                                'active'     => 'active',
-                                'pricePence' => (int)$planRow['monthly_price_pence'],
-                                'currency'   => (string)$planRow['currency'],
-                                'planName'   => (string)$planRow['plan_name'],
-                            ]);
-                        }
+                        // Insert new membership using INSERT-SELECT (avoids binding numeric snapshot values).
+                        $pdo->prepare(
+                            'INSERT INTO ssa_user_memberships
+                                (uid, plan_id, status, started_at, price_snapshot_pence, currency_snapshot, plan_name_snapshot)
+                             SELECT :uid, id, :active, UTC_TIMESTAMP(), monthly_price_pence, currency, COALESCE(display_name, name)
+                             FROM ssa_membership_plans
+                             WHERE id = :planId'
+                        )->execute([
+                            'uid'    => $memberUid,
+                            'active' => 'active',
+                            'planId' => $targetPlanId,
+                        ]);
                     }
                     break;
 
                 case 'addon_request':
                     $addonId = isset($payload['addonId']) ? (int)$payload['addonId'] : null;
 
-                    if ($addonId !== null) {
-                        $addonStmt = $pdo->prepare(
+                    if ($addonId !== null && $addonId > 0) {
+                        $pdo->prepare(
                             'UPDATE ssa_user_membership_addons
                              SET status = :active, activated_at = UTC_TIMESTAMP()
                              WHERE uid = :uid AND addon_id = :addonId AND status = :requested'
-                        );
-                        $addonStmt->execute([
+                        )->execute([
                             'active'    => 'active',
                             'uid'       => $memberUid,
                             'addonId'   => $addonId,
@@ -291,37 +297,29 @@ try {
                     break;
 
                 case 'membership_cancellation':
-                    $currentMembershipId = isset($payload['currentMembershipId']) ? (int)$payload['currentMembershipId'] : null;
-
-                    if ($currentMembershipId !== null) {
-                        $cancelStmt = $pdo->prepare(
-                            'UPDATE ssa_user_memberships
-                             SET status = :cancelled,
-                                 cancelled_at = UTC_TIMESTAMP(),
-                                 cancellation_effective_at = UTC_TIMESTAMP()
-                             WHERE id = :id AND uid = :uid AND status = :active'
-                        );
-                        $cancelStmt->execute([
-                            'cancelled' => 'cancelled',
-                            'id'        => $currentMembershipId,
-                            'uid'       => $memberUid,
-                            'active'    => 'active',
-                        ]);
-                    }
+                    $pdo->prepare(
+                        'UPDATE ssa_user_memberships
+                         SET status = :cancelled, cancelled_at = UTC_TIMESTAMP(),
+                             cancellation_effective_at = UTC_TIMESTAMP()
+                         WHERE uid = :uid AND status = :active'
+                    )->execute([
+                        'cancelled' => 'cancelled',
+                        'uid'       => $memberUid,
+                        'active'    => 'active',
+                    ]);
                     break;
             }
         }
 
         // Update the admin request row (both approve and decline).
-        $updateStmt = $pdo->prepare(
+        $pdo->prepare(
             'UPDATE ssa_admin_requests
-             SET status           = :newStatus,
-                 actioned_at      = UTC_TIMESTAMP(),
-                 actioned_by_uid  = :actionedByUid,
-                 admin_comment    = :adminComment
+             SET status          = :newStatus,
+                 actioned_at     = UTC_TIMESTAMP(),
+                 actioned_by_uid = :actionedByUid,
+                 admin_comment   = :adminComment
              WHERE id = :id AND status = :pending'
-        );
-        $updateStmt->execute([
+        )->execute([
             'newStatus'      => $newStatus,
             'actionedByUid'  => $callerUid,
             'adminComment'   => $adminComment !== '' ? $adminComment : null,
@@ -338,12 +336,12 @@ try {
         throw $txEx;
     }
 
-    // ── Post-transaction: audit log ────────────────────────────────────────────
+    // ── Post-transaction: audit log (non-fatal) ────────────────────────────────
 
     try {
         ssaActionEnsureAuditLogTable($pdo);
 
-        $auditStmt = $pdo->prepare(
+        $pdo->prepare(
             'INSERT INTO ssa_member_request_audit_log
                 (request_id, request_type, member_uid, member_name_snapshot,
                  previous_status, new_status, change_summary,
@@ -351,9 +349,9 @@ try {
              VALUES
                 (:requestId, :requestType, :memberUid, :memberNameSnapshot,
                  :previousStatus, :newStatus, :changeSummary,
-                 :adminUid, :adminNameSnapshot, :adminComment, UTC_TIMESTAMP(), UTC_TIMESTAMP())'
-        );
-        $auditStmt->execute([
+                 :adminUid, :adminNameSnapshot, :adminComment, UTC_TIMESTAMP(),
+                 CASE :isApproved WHEN 1 THEN UTC_TIMESTAMP() ELSE NULL END)'
+        )->execute([
             'requestId'          => $requestId,
             'requestType'        => $requestType,
             'memberUid'          => $memberUid,
@@ -364,12 +362,16 @@ try {
             'adminUid'           => $callerUid,
             'adminNameSnapshot'  => $callerName !== '' ? $callerName : null,
             'adminComment'       => $adminComment !== '' ? $adminComment : null,
+            'isApproved'         => $action === 'approve' ? 1 : 0,
         ]);
     } catch (Throwable $auditEx) {
-        error_log('SSA admin/member-request-action.php: audit log failed: ' . $auditEx->getMessage());
+        error_log(sprintf(
+            'SSA admin/member-request-action.php: audit log failed [%s] %s in %s:%d',
+            get_class($auditEx), $auditEx->getMessage(), $auditEx->getFile(), $auditEx->getLine()
+        ));
     }
 
-    // ── Post-transaction: in-app notification for member ──────────────────────
+    // ── Post-transaction: in-app notification for member (non-fatal) ──────────
 
     try {
         ssaUserNotificationsEnsureTable($pdo);
@@ -392,10 +394,13 @@ try {
             (string)$requestId
         );
     } catch (Throwable $notifEx) {
-        error_log('SSA admin/member-request-action.php: member notification failed: ' . $notifEx->getMessage());
+        error_log(sprintf(
+            'SSA admin/member-request-action.php: member notification failed [%s] %s',
+            get_class($notifEx), $notifEx->getMessage()
+        ));
     }
 
-    // ── Post-transaction: in-app notifications for other admins ───────────────
+    // ── Post-transaction: in-app notifications for other admins (non-fatal) ───
 
     try {
         $adminListStmt = $pdo->prepare(
@@ -429,21 +434,26 @@ try {
                         (string)$requestId
                     );
                 } catch (Throwable $adminNotifEx) {
-                    error_log('SSA admin/member-request-action.php: admin notification failed for uid=' . $adminUid . ': ' . $adminNotifEx->getMessage());
+                    error_log(sprintf(
+                        'SSA admin/member-request-action.php: admin notification failed for uid=%d [%s] %s',
+                        (int)$adminUid, get_class($adminNotifEx), $adminNotifEx->getMessage()
+                    ));
                 }
             }
         }
     } catch (Throwable $adminNotifListEx) {
-        error_log('SSA admin/member-request-action.php: admin list notification failed: ' . $adminNotifListEx->getMessage());
+        error_log(sprintf(
+            'SSA admin/member-request-action.php: admin list notification failed [%s] %s',
+            get_class($adminNotifListEx), $adminNotifListEx->getMessage()
+        ));
     }
 
-    // ── Post-transaction: push notifications ──────────────────────────────────
+    // ── Post-transaction: push notifications (non-fatal) ──────────────────────
 
     try {
         $hasRevokedAt = ssaActionCheckPushTokenColumn($pdo);
         $pushWhere    = $hasRevokedAt ? 'AND revoked_at IS NULL' : '';
 
-        // Member push.
         $memberTokenStmt = $pdo->prepare(
             "SELECT device_token, environment FROM ssa_push_tokens WHERE uid = :uid {$pushWhere}"
         );
@@ -461,11 +471,13 @@ try {
             ssaPushSendToTokenRows($memberTokens, $pushTitle, $pushBody, ['requestId' => $requestId]);
         }
     } catch (Throwable $memberPushEx) {
-        error_log('SSA admin/member-request-action.php: member push failed: ' . $memberPushEx->getMessage());
+        error_log(sprintf(
+            'SSA admin/member-request-action.php: member push failed [%s] %s',
+            get_class($memberPushEx), $memberPushEx->getMessage()
+        ));
     }
 
     try {
-        // Other admin pushes.
         $adminListStmt2 = $pdo->prepare(
             "SELECT DISTINCT u.uid
              FROM bs_users u
@@ -477,8 +489,8 @@ try {
         $otherAdminUids2 = $adminListStmt2->fetchAll(PDO::FETCH_COLUMN);
 
         if (!empty($otherAdminUids2)) {
-            $hasRevokedAt = ssaActionCheckPushTokenColumn($pdo);
-            $pushWhere    = $hasRevokedAt ? 'AND revoked_at IS NULL' : '';
+            $hasRevokedAt2 = ssaActionCheckPushTokenColumn($pdo);
+            $pushWhere2    = $hasRevokedAt2 ? 'AND revoked_at IS NULL' : '';
 
             if ($action === 'approve') {
                 $adminPushTitle = 'Member request approved';
@@ -491,7 +503,7 @@ try {
             foreach ($otherAdminUids2 as $adminUid) {
                 try {
                     $adminTokenStmt = $pdo->prepare(
-                        "SELECT device_token, environment FROM ssa_push_tokens WHERE uid = :uid {$pushWhere}"
+                        "SELECT device_token, environment FROM ssa_push_tokens WHERE uid = :uid {$pushWhere2}"
                     );
                     $adminTokenStmt->execute(['uid' => (int)$adminUid]);
                     $adminTokens = $adminTokenStmt->fetchAll();
@@ -500,12 +512,18 @@ try {
                         ssaPushSendToTokenRows($adminTokens, $adminPushTitle, $adminPushBody, ['requestId' => $requestId]);
                     }
                 } catch (Throwable $adminPushEx) {
-                    error_log('SSA admin/member-request-action.php: admin push failed for uid=' . $adminUid . ': ' . $adminPushEx->getMessage());
+                    error_log(sprintf(
+                        'SSA admin/member-request-action.php: admin push failed for uid=%d [%s] %s',
+                        (int)$adminUid, get_class($adminPushEx), $adminPushEx->getMessage()
+                    ));
                 }
             }
         }
     } catch (Throwable $adminPushListEx) {
-        error_log('SSA admin/member-request-action.php: admin push list failed: ' . $adminPushListEx->getMessage());
+        error_log(sprintf(
+            'SSA admin/member-request-action.php: admin push list failed [%s] %s',
+            get_class($adminPushListEx), $adminPushListEx->getMessage()
+        ));
     }
 
     ssaApiJsonResponse(200, [
@@ -513,13 +531,14 @@ try {
         'requestId' => $requestId,
         'newStatus' => $newStatus,
     ]);
+
 } catch (Throwable $e) {
     $sqlState = ($e instanceof \PDOException && is_array($e->errorInfo))
         ? ($e->errorInfo[0] ?? 'unknown')
         : 'n/a';
     error_log(sprintf(
-        'SSA admin/member-request-action.php FAILED [%s] SQLSTATE=%s message=%s',
-        get_class($e), $sqlState, $e->getMessage()
+        'SSA admin/member-request-action.php FAILED [%s] SQLSTATE=%s message=%s in %s:%d',
+        get_class($e), $sqlState, $e->getMessage(), $e->getFile(), $e->getLine()
     ));
     ssaApiJsonResponse(500, ['error' => 'server_error', 'message' => 'Unable to process request action.']);
 }

@@ -37,6 +37,29 @@ if ($auth0Sub === '') {
 
 function ssaAdminRequestsEnsureColumns(PDO $pdo): void
 {
+    // Self-create the table if it doesn't exist, then idempotently extend it.
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS ssa_admin_requests (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          uid INT UNSIGNED NOT NULL,
+          auth0_sub VARCHAR(128) NOT NULL,
+          request_type VARCHAR(64) NOT NULL,
+          status VARCHAR(32) NOT NULL DEFAULT 'pending',
+          target_key VARCHAR(128) NULL,
+          target_id INT UNSIGNED NULL,
+          payload_json JSON NULL,
+          requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          actioned_at DATETIME NULL,
+          actioned_by_uid INT UNSIGNED NULL,
+          admin_comment TEXT NULL,
+          PRIMARY KEY (id),
+          KEY idx_ssa_admin_requests_uid (uid),
+          KEY idx_ssa_admin_requests_status (status),
+          KEY idx_ssa_admin_requests_type (request_type),
+          KEY idx_ssa_admin_requests_requested_at (requested_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
     $stmt = $pdo->query(
         "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_admin_requests'"
@@ -47,7 +70,7 @@ function ssaAdminRequestsEnsureColumns(PDO $pdo): void
         $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN actioned_at DATETIME NULL');
     }
     if (!in_array('actioned_by_uid', $cols, true)) {
-        $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN actioned_by_uid INT NULL');
+        $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN actioned_by_uid INT UNSIGNED NULL');
     }
     if (!in_array('admin_comment', $cols, true)) {
         $pdo->exec('ALTER TABLE ssa_admin_requests ADD COLUMN admin_comment TEXT NULL');
