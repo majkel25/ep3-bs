@@ -253,28 +253,35 @@ try {
                     $targetPlanId = isset($payload['targetPlanId']) ? (int)$payload['targetPlanId'] : null;
 
                     if ($targetPlanId !== null && $targetPlanId > 0) {
-                        // Cancel all current active memberships for this user.
+                        // Verify plan exists.
+                        $planCheck = $pdo->prepare('SELECT id FROM ssa_membership_plans WHERE id = :planId LIMIT 1');
+                        $planCheck->execute(['planId' => $targetPlanId]);
+                        if (!$planCheck->fetch()) {
+                            $pdo->rollBack();
+                            ssaApiJsonResponse(400, [
+                                'error'   => 'invalid_membership_plan',
+                                'message' => 'The requested membership plan is no longer available.',
+                            ]);
+                        }
+
+                        // End all current active memberships for this user (set ended_at to today).
                         $pdo->prepare(
                             'UPDATE ssa_user_memberships
-                             SET status = :cancelled, cancelled_at = UTC_TIMESTAMP()
-                             WHERE uid = :uid AND status = :active'
+                             SET ended_at = CURDATE()
+                             WHERE uid = :uid AND ended_at IS NULL'
                         )->execute([
-                            'cancelled' => 'cancelled',
-                            'uid'       => $memberUid,
-                            'active'    => 'active',
+                            'uid' => $memberUid,
                         ]);
 
-                        // Insert new membership using INSERT-SELECT (avoids binding numeric snapshot values).
+                        // Insert new membership with today as started_at.
                         $pdo->prepare(
                             'INSERT INTO ssa_user_memberships
-                                (uid, plan_id, status, started_at, price_snapshot_pence, currency_snapshot, plan_name_snapshot)
-                             SELECT :uid, id, :active, UTC_TIMESTAMP(), monthly_price_pence, currency, COALESCE(display_name, name)
-                             FROM ssa_membership_plans
-                             WHERE id = :planId'
+                                (uid, plan_id, started_at, ended_at, notes)
+                             VALUES (:uid, :planId, CURDATE(), NULL, :notes)'
                         )->execute([
                             'uid'    => $memberUid,
-                            'active' => 'active',
                             'planId' => $targetPlanId,
+                            'notes'  => 'Admin-approved membership change',
                         ]);
                     }
                     break;
@@ -283,12 +290,24 @@ try {
                     $addonId = isset($payload['addonId']) ? (int)$payload['addonId'] : null;
 
                     if ($addonId !== null && $addonId > 0) {
+                        // Verify addon exists.
+                        $addonCheck = $pdo->prepare('SELECT id FROM ssa_membership_addons WHERE id = :addonId LIMIT 1');
+                        $addonCheck->execute(['addonId' => $addonId]);
+                        if (!$addonCheck->fetch()) {
+                            $pdo->rollBack();
+                            ssaApiJsonResponse(400, [
+                                'error'   => 'invalid_addon',
+                                'message' => 'The requested add-on is no longer available.',
+                            ]);
+                        }
+
+                        // Approve the addon by updating status to 'approved'.
                         $pdo->prepare(
                             'UPDATE ssa_user_membership_addons
-                             SET status = :active, activated_at = UTC_TIMESTAMP()
+                             SET status = :approved, resolved_at = UTC_TIMESTAMP()
                              WHERE uid = :uid AND addon_id = :addonId AND status = :requested'
                         )->execute([
-                            'active'    => 'active',
+                            'approved'  => 'approved',
                             'uid'       => $memberUid,
                             'addonId'   => $addonId,
                             'requested' => 'requested',
@@ -297,15 +316,13 @@ try {
                     break;
 
                 case 'membership_cancellation':
+                    // End the current active membership (set ended_at to today).
                     $pdo->prepare(
                         'UPDATE ssa_user_memberships
-                         SET status = :cancelled, cancelled_at = UTC_TIMESTAMP(),
-                             cancellation_effective_at = UTC_TIMESTAMP()
-                         WHERE uid = :uid AND status = :active'
+                         SET ended_at = CURDATE()
+                         WHERE uid = :uid AND ended_at IS NULL'
                     )->execute([
-                        'cancelled' => 'cancelled',
-                        'uid'       => $memberUid,
-                        'active'    => 'active',
+                        'uid' => $memberUid,
                     ]);
                     break;
             }
