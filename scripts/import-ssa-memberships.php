@@ -450,7 +450,7 @@ echo "Validating workbook totals...\n";
 
 $actualCounts = [];
 foreach ($rows as $row) {
-    $normKey = strtolower(trim((string)($row['package_raw'] ?? '')));
+    $normKey = preg_replace('/\s+/', ' ', strtolower(trim((string)($row['package_raw'] ?? ''))));
     $actualCounts[$normKey] = ($actualCounts[$normKey] ?? 0) + 1;
 }
 
@@ -594,7 +594,7 @@ foreach ($rows as $row) {
     ];
 
     // Resolve plan_key
-    $normPackage = strtolower(trim((string)($row['package_raw'] ?? '')));
+    $normPackage = preg_replace('/\s+/', ' ', strtolower(trim((string)($row['package_raw'] ?? ''))));
     if (isset(PACKAGE_MAP[$normPackage])) {
         $planKey = PACKAGE_MAP[$normPackage];
         if (isset($plansByKey[$planKey])) {
@@ -898,7 +898,7 @@ $checkActiveStmt = $pdo->prepare(
 );
 
 foreach ($results as $r) {
-    $normPackage = strtolower(trim((string)($r['package_raw'] ?? '')));
+    $normPackage = preg_replace('/\s+/', ' ', strtolower(trim((string)($r['package_raw'] ?? ''))));
     $rowStatus   = 'unresolved';
     $reason      = $r['reason'];
     $matchedUid  = $r['matched_uid'];
