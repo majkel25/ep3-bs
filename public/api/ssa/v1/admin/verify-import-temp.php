@@ -22,7 +22,7 @@ try {
     $log[] = "New memberships from import: " . json_encode($newMems);
 
     // Sample: one imported member
-    $sample = $pdo->query("SELECT u.email, um.id, um.plan_id, um.status, um.started_at, p.plan_key FROM ssa_user_memberships um JOIN bs_users u ON um.uid=u.id JOIN ssa_membership_plans p ON um.plan_id=p.id WHERE um.source='legacy_excel_import' LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+    $sample = $pdo->query("SELECT um.uid, um.id, um.plan_id, um.status, um.started_at, p.plan_key FROM ssa_user_memberships um JOIN ssa_membership_plans p ON um.plan_id=p.id WHERE um.source='legacy_excel_import' LIMIT 3")->fetchAll(PDO::FETCH_ASSOC);
     $log[] = "Sample imported membership: " . json_encode($sample);
 
     // Check conflicts in import_rows
