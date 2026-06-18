@@ -154,7 +154,7 @@ try {
         foreach ($pdo->query('SELECT id,plan_key FROM ssa_membership_plans')->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $planKeyToId[$r['plan_key']] = (int)$r['id'];
         }
-        $updParent = $pdo->prepare('UPDATE ssa_membership_plans SET parent_plan_id=:pid WHERE plan_key=:pk AND (parent_plan_id IS NULL OR parent_plan_id!=:pid)');
+        $updParent = $pdo->prepare('UPDATE ssa_membership_plans SET parent_plan_id=:pid WHERE plan_key=:pk');
         foreach ($newPlans as [$pk,$name,$dn,$sort,$active,$public,$parentKey]) {
             if ($parentKey === null) continue;
             $parentId = $planKeyToId[$parentKey] ?? null;
