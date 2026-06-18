@@ -15,7 +15,7 @@ declare(strict_types=1);
  *
  * Auth: admin or club_owner only.
  *
- * Response: { status, memberUid, newMembershipId, newMembershipPlanKey, packageId, actionType }
+ * Response: { status, memberUid, newMembershipId, newMembershipPlanKey, packageId, actionType, requestId }
  *
  * Error codes:
  *   400  missing/invalid fields
@@ -35,13 +35,12 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     ssaApiJsonResponse(405, ['error' => 'method_not_allowed', 'message' => 'Only POST is allowed.']);
 }
 
-$claims   = ssaApiRequireAuth0Claims();
-$auth0Sub = trim((string)($claims['sub'] ?? ''));
-if ($auth0Sub === '') {
-    ssaApiJsonResponse(401, ['error' => 'missing_auth0_subject', 'message' => 'Auth0 token missing subject.']);
-}
+// ── Request ID ───────────────────────────────────────────────────────────────
 
-// ── Period-date helper ──────────────────────────────────────────────────────
+$requestId = bin2hex(random_bytes(8));
+$stage     = 'authentication';
+
+// ── Period-date helper ───────────────────────────────────────────────────────
 
 function ssaAssignCalcFreshPeriodDates(string $billingType, ?string $availableUntil): array
 {
@@ -56,7 +55,6 @@ function ssaAssignCalcFreshPeriodDates(string $billingType, ?string $availableUn
             $endLon = $nowLon->modify('+1 year')->setTime(23, 59, 59);
         }
     } elseif (in_array($billingType, ['upfront', 'fixed_term', 'one_time'], true)) {
-        // No configured end: end of current calendar year; if already past, +1 year
         $endLon = new DateTimeImmutable($nowLon->format('Y') . '-12-31 23:59:59', $tz);
         if ($endLon <= $nowLon) {
             $endLon = $endLon->modify('+1 year');
@@ -75,37 +73,45 @@ function ssaAssignCalcFreshPeriodDates(string $billingType, ?string $availableUn
     ];
 }
 
-// ── Main ────────────────────────────────────────────────────────────────────
+// ── Main ─────────────────────────────────────────────────────────────────────
 
 try {
+    $claims   = ssaApiRequireAuth0Claims();
+    $auth0Sub = trim((string)($claims['sub'] ?? ''));
+    if ($auth0Sub === '') {
+        ssaApiJsonResponse(401, ['error' => 'missing_auth0_subject', 'message' => 'Auth0 token missing subject.', 'requestId' => $requestId]);
+    }
+
     $pdo = ssaApiCreatePdo();
 
-    // ── Auth ─────────────────────────────────────────────────────────────────
+    // ── Auth ──────────────────────────────────────────────────────────────────
     $linkStmt = $pdo->prepare(
         'SELECT uid FROM ssa_auth0_user_links WHERE auth0_sub = :sub AND revoked_at IS NULL LIMIT 1'
     );
     $linkStmt->execute(['sub' => $auth0Sub]);
     $link = $linkStmt->fetch();
     if (!is_array($link) || (int)($link['uid'] ?? 0) <= 0) {
-        ssaApiJsonResponse(403, ['error' => 'not_linked', 'message' => 'No linked account found.']);
+        ssaApiJsonResponse(403, ['error' => 'not_linked', 'message' => 'No linked account found.', 'requestId' => $requestId]);
     }
     $callerUid  = (int)$link['uid'];
     $callerType = ssaApiGetUserMetaValue($pdo, $callerUid, 'ssa.user_type') ?? 'member';
     if (!in_array($callerType, ['admin', 'club_owner'], true)) {
         ssaApiJsonResponse(403, [
-            'error'   => 'forbidden',
-            'message' => 'Administrator access is required to assign packages.',
+            'error'     => 'forbidden',
+            'message'   => 'Administrator access is required to assign packages.',
+            'requestId' => $requestId,
         ]);
     }
 
-    // ── Parse body ───────────────────────────────────────────────────────────
+    // ── Parse body ────────────────────────────────────────────────────────────
+    $stage   = 'request_validation';
     $rawBody = (string)file_get_contents('php://input');
     if (trim($rawBody) === '') {
-        ssaApiJsonResponse(400, ['error' => 'empty_body', 'message' => 'Request body must contain JSON.']);
+        ssaApiJsonResponse(400, ['error' => 'empty_body', 'message' => 'Request body must contain JSON.', 'requestId' => $requestId]);
     }
     $body = json_decode($rawBody, true);
     if (!is_array($body)) {
-        ssaApiJsonResponse(400, ['error' => 'invalid_json', 'message' => 'Request body must be valid JSON.']);
+        ssaApiJsonResponse(400, ['error' => 'invalid_json', 'message' => 'Request body must be valid JSON.', 'requestId' => $requestId]);
     }
 
     $memberUid = isset($body['memberUid']) && is_numeric($body['memberUid']) ? (int)$body['memberUid'] : 0;
@@ -117,14 +123,15 @@ try {
     }
 
     if ($memberUid <= 0) {
-        ssaApiJsonResponse(400, ['error' => 'missing_member_uid', 'message' => 'memberUid is required.']);
+        ssaApiJsonResponse(400, ['error' => 'missing_member_uid', 'message' => 'memberUid is required.', 'requestId' => $requestId]);
     }
     if ($packageId <= 0) {
-        ssaApiJsonResponse(400, ['error' => 'missing_package_id', 'message' => 'packageId is required.']);
+        ssaApiJsonResponse(400, ['error' => 'missing_package_id', 'message' => 'packageId is required.', 'requestId' => $requestId]);
     }
 
-    // ── Load target package ──────────────────────────────────────────────────
-    $planColStmt    = $pdo->query(
+    // ── Load target package ───────────────────────────────────────────────────
+    $stage = 'package_lookup';
+    $planColStmt = $pdo->query(
         "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_membership_plans'"
     );
@@ -140,30 +147,32 @@ try {
     $planStmt->execute(['id' => $packageId]);
     $planRow = $planStmt->fetch(PDO::FETCH_ASSOC);
     if (!$planRow) {
-        ssaApiJsonResponse(404, ['error' => 'package_not_found', 'message' => 'Package not found.']);
+        ssaApiJsonResponse(404, ['error' => 'package_not_found', 'message' => 'Package not found.', 'requestId' => $requestId]);
     }
     if (!(bool)(int)($planRow['is_active'] ?? 0)) {
         ssaApiJsonResponse(422, [
-            'error'   => 'package_inactive',
-            'message' => 'This package is inactive and cannot be assigned to new members.',
+            'error'     => 'package_inactive',
+            'message'   => 'This package is inactive and cannot be assigned to new members.',
+            'requestId' => $requestId,
         ]);
     }
 
-    // ── Load member ──────────────────────────────────────────────────────────
+    // ── Load member ───────────────────────────────────────────────────────────
+    $stage = 'member_lookup';
     $memberStmt = $pdo->prepare('SELECT uid, alias, email FROM bs_users WHERE uid = :uid LIMIT 1');
     $memberStmt->execute(['uid' => $memberUid]);
     $memberRow = $memberStmt->fetch(PDO::FETCH_ASSOC);
     if (!$memberRow) {
-        ssaApiJsonResponse(404, ['error' => 'member_not_found', 'message' => 'Member not found.']);
+        ssaApiJsonResponse(404, ['error' => 'member_not_found', 'message' => 'Member not found.', 'requestId' => $requestId]);
     }
     $memberName = (string)($memberRow['alias'] ?? '');
 
-    // ── Caller name (for audit) ──────────────────────────────────────────────
+    // ── Caller name (for audit) ───────────────────────────────────────────────
     $callerNameStmt = $pdo->prepare('SELECT alias FROM bs_users WHERE uid = :uid LIMIT 1');
     $callerNameStmt->execute(['uid' => $callerUid]);
     $callerName = (string)($callerNameStmt->fetchColumn() ?: '');
 
-    // ── Inspect ssa_user_memberships columns ─────────────────────────────────
+    // ── Inspect ssa_user_memberships columns ──────────────────────────────────
     $memColStmt  = $pdo->query(
         "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_user_memberships'"
@@ -175,11 +184,13 @@ try {
     $hasMemSource       = in_array('source', $memCols, true);
     $hasMemUpdatedAt    = in_array('updated_at', $memCols, true);
 
-    // ── Transaction ──────────────────────────────────────────────────────────
+    // ── Transaction ───────────────────────────────────────────────────────────
     $pdo->beginTransaction();
+    $transactionCommitted = false;
 
     try {
         // Lock the member's current active membership row
+        $stage = 'membership_lock';
         $lockStmt = $pdo->prepare(
             "SELECT id, plan_id, current_period_ends_at, cancellation_notice_deadline_at
              FROM ssa_user_memberships
@@ -193,51 +204,50 @@ try {
         $oldMembershipId   = $currentMembership ? (int)$currentMembership['id']      : null;
         $currentPlanId     = $currentMembership ? (int)$currentMembership['plan_id'] : null;
 
-        // ── Optimistic concurrency ────────────────────────────────────────────
-        // expectedCurrentMembershipId:
-        //   int  → client expected a specific active membership
-        //   null → client expected no active membership
+        // ── Optimistic concurrency ─────────────────────────────────────────────
         if ($expectedCurrentMembershipId !== null) {
             if ($oldMembershipId !== $expectedCurrentMembershipId) {
                 $pdo->rollBack();
                 ssaApiJsonResponse(409, [
-                    'error'   => 'membership_changed',
-                    'message' => "This member's membership changed before the assignment was completed. Reload the member and try again.",
+                    'error'     => 'membership_changed',
+                    'message'   => "This member's membership changed before the assignment was completed. Reload the member and try again.",
+                    'requestId' => $requestId,
                 ]);
             }
         } else {
             if ($oldMembershipId !== null) {
                 $pdo->rollBack();
                 ssaApiJsonResponse(409, [
-                    'error'   => 'membership_changed',
-                    'message' => "This member's membership changed before the assignment was completed. Reload the member and try again.",
+                    'error'     => 'membership_changed',
+                    'message'   => "This member's membership changed before the assignment was completed. Reload the member and try again.",
+                    'requestId' => $requestId,
                 ]);
             }
         }
 
-        // ── Duplicate package check ───────────────────────────────────────────
+        // ── Duplicate package check ────────────────────────────────────────────
         if ($currentPlanId === $packageId) {
             $pdo->rollBack();
             ssaApiJsonResponse(409, [
-                'error'   => 'already_assigned',
-                'message' => 'This member is already assigned to this package.',
+                'error'     => 'already_assigned',
+                'message'   => 'This member is already assigned to this package.',
+                'requestId' => $requestId,
             ]);
         }
 
-        // ── Period dates ──────────────────────────────────────────────────────
+        // ── Period dates ───────────────────────────────────────────────────────
         if ($currentMembership) {
-            // Inherit the existing billing period (pro-rata plan change)
             $periodEndsAt   = $currentMembership['current_period_ends_at'];
             $cancelDeadline = $currentMembership['cancellation_notice_deadline_at'];
             if (empty($periodEndsAt) || empty($cancelDeadline)) {
                 $pdo->rollBack();
                 ssaApiJsonResponse(400, [
-                    'error'   => 'membership_period_invalid',
-                    'message' => 'The current membership billing period could not be determined.',
+                    'error'     => 'membership_period_invalid',
+                    'message'   => 'The current membership billing period could not be determined.',
+                    'requestId' => $requestId,
                 ]);
             }
         } else {
-            // Fresh assignment — calculate dates from package billing rules
             $billingType    = $hasBillingType ? strtolower((string)($planRow['billing_type'] ?? 'monthly')) : 'monthly';
             $availableUntil = $hasAvailUntil  ? ($planRow['available_until'] ?? null) : null;
             $dates          = ssaAssignCalcFreshPeriodDates($billingType, $availableUntil);
@@ -249,7 +259,8 @@ try {
         $priceSnapshot    = (int)($planRow['monthly_price_pence'] ?? 0);
         $currencySnapshot = (string)($planRow['currency'] ?? 'GBP');
 
-        // ── Supersede old membership first (releases the active_uid unique constraint) ──
+        // ── Supersede old membership (releases the active_uid unique constraint) ─
+        $stage = 'old_membership_update';
         if ($oldMembershipId !== null) {
             $supersedeSql = "UPDATE ssa_user_memberships SET status = 'superseded'";
             if ($hasCancelEffective) $supersedeSql .= ', cancellation_effective_at = UTC_TIMESTAMP()';
@@ -258,7 +269,8 @@ try {
             $pdo->prepare($supersedeSql)->execute(['id' => $oldMembershipId]);
         }
 
-        // ── Insert new active membership ──────────────────────────────────────
+        // ── Insert new active membership ───────────────────────────────────────
+        $stage = 'new_membership_insert';
         $insertCols = 'uid, plan_id, status, started_at, current_period_starts_at,'
                     . ' current_period_ends_at, cancellation_notice_deadline_at,'
                     . ' price_snapshot_pence, currency_snapshot, plan_name_snapshot';
@@ -278,7 +290,7 @@ try {
         if ($hasMemSource) {
             $insertCols   .= ', source';
             $insertVals   .= ', :source';
-            $insertParams['source'] = 'admin_assignment';
+            $insertParams['source'] = 'admin';   // ENUM value; 'admin' = any admin-initiated action
         }
         if ($hasMemNotes) {
             $insertCols   .= ', notes';
@@ -290,30 +302,32 @@ try {
             ->execute($insertParams);
         $newMembershipId = (int)$pdo->lastInsertId();
 
-        // ── Back-fill superseded_by_membership_id ─────────────────────────────
+        // ── Back-fill superseded_by_membership_id ──────────────────────────────
+        $stage = 'supersession_link';
         if ($oldMembershipId !== null && $newMembershipId > 0 && $hasSupersededBy) {
             $pdo->prepare(
                 'UPDATE ssa_user_memberships SET superseded_by_membership_id = :newId WHERE id = :oldId'
             )->execute(['newId' => $newMembershipId, 'oldId' => $oldMembershipId]);
         }
 
-        // ── Audit in ssa_membership_package_audit ─────────────────────────────
+        // ── Resolve old plan key for audit ─────────────────────────────────────
         $oldPlanKey = null;
-        if ($currentPlanId) {
-            $oldPlanKey = $pdo->prepare('SELECT plan_key FROM ssa_membership_plans WHERE id = :id LIMIT 1')
-                              ->execute(['id' => $currentPlanId]) ? null : null;
+        if ($currentPlanId !== null) {
             $oldPkStmt = $pdo->prepare('SELECT plan_key FROM ssa_membership_plans WHERE id = :id LIMIT 1');
             $oldPkStmt->execute(['id' => $currentPlanId]);
             $oldPlanKey = $oldPkStmt->fetchColumn() ?: null;
         }
 
-        $actionType = $oldMembershipId ? 'membership_package_replacement' : 'new_membership_assignment';
+        $actionType = $oldMembershipId !== null ? 'membership_package_replacement' : 'new_membership_assignment';
 
-        $auditCheck = $pdo->query(
+        // ── Audit record in ssa_membership_package_audit (mandatory, in transaction) ──
+        $stage = 'audit_insert';
+        $auditExists = (int)$pdo->query(
             "SELECT COUNT(*) FROM information_schema.TABLES
              WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_membership_package_audit'"
-        );
-        if ((int)$auditCheck->fetchColumn() > 0) {
+        )->fetchColumn() > 0;
+
+        if ($auditExists) {
             $pdo->prepare(
                 'INSERT INTO ssa_membership_package_audit
                     (package_id, admin_uid, admin_name_snapshot, action,
@@ -347,7 +361,9 @@ try {
             ]);
         }
 
+        $stage = 'transaction_commit';
         $pdo->commit();
+        $transactionCommitted = true;
 
     } catch (Throwable $txEx) {
         if ($pdo->inTransaction()) {
@@ -356,14 +372,16 @@ try {
         throw $txEx;
     }
 
-    // ── Post-transaction: member in-app notification (non-fatal) ────────────
-    $notifMsg = '';
+    // ── Post-transaction: in-app notification (non-fatal) ────────────────────
+    $notifMsg        = '';
+    $notifWarning    = null;
+    $stage           = 'notification_insert';
+    $newPlanName     = (string)($planRow['display_name'] ?: $planRow['name'] ?? 'your new package');
+
     try {
         ssaUserNotificationsEnsureTable($pdo);
 
-        $newPlanName = $planRow['display_name'] ?: $planRow['name'] ?? 'your new package';
-
-        if ($oldMembershipId !== null && $currentPlanId) {
+        if ($oldMembershipId !== null && $currentPlanId !== null) {
             $oldPlanNameStmt = $pdo->prepare(
                 'SELECT COALESCE(display_name, name) FROM ssa_membership_plans WHERE id = :id LIMIT 1'
             );
@@ -384,10 +402,15 @@ try {
             (string)$newMembershipId
         );
     } catch (Throwable $notifEx) {
-        error_log('SSA member-package-assign.php: notification failed: ' . $notifEx->getMessage());
+        $notifWarning = 'Notification could not be delivered.';
+        error_log(sprintf(
+            'SSA member-package-assign.php: notification failed [%s] requestId=%s message=%s',
+            get_class($notifEx), $requestId, $notifEx->getMessage()
+        ));
     }
 
-    // ── Post-transaction: push notification (non-fatal) ──────────────────────
+    // ── Post-transaction: APNs push (non-fatal) ───────────────────────────────
+    $stage = 'push_delivery';
     if ($notifMsg !== '') {
         try {
             $hasRevokedAt = (bool)$pdo->query(
@@ -405,25 +428,44 @@ try {
                 ssaPushSendToTokenRows($tokens, 'Membership Package Updated', $notifMsg, []);
             }
         } catch (Throwable $pushEx) {
-            error_log('SSA member-package-assign.php: push failed: ' . $pushEx->getMessage());
+            if ($notifWarning === null) {
+                $notifWarning = 'Push delivery could not be completed.';
+            }
+            error_log(sprintf(
+                'SSA member-package-assign.php: push failed [%s] requestId=%s message=%s',
+                get_class($pushEx), $requestId, $pushEx->getMessage()
+            ));
         }
     }
 
-    ssaApiJsonResponse(200, [
+    $response = [
         'status'               => 'ok',
         'memberUid'            => $memberUid,
         'newMembershipId'      => $newMembershipId,
         'newMembershipPlanKey' => (string)$planRow['plan_key'],
         'packageId'            => $packageId,
         'actionType'           => $actionType,
-    ]);
+        'requestId'            => $requestId,
+    ];
+    if ($notifWarning !== null) {
+        $response['notificationWarning'] = $notifWarning;
+    }
+    ssaApiJsonResponse(200, $response);
 
 } catch (Throwable $e) {
     $sqlState = ($e instanceof \PDOException && is_array($e->errorInfo))
         ? ($e->errorInfo[0] ?? 'unknown') : 'n/a';
+    $dbErrNo  = ($e instanceof \PDOException && is_array($e->errorInfo))
+        ? ($e->errorInfo[1] ?? 'n/a') : 'n/a';
     error_log(sprintf(
-        'SSA admin/member-package-assign.php FAILED [%s] SQLSTATE=%s message=%s in %s:%d',
-        get_class($e), $sqlState, $e->getMessage(), $e->getFile(), $e->getLine()
+        'SSA admin/member-package-assign.php FAILED stage=%s requestId=%s [%s] SQLSTATE=%s ERRNO=%s message=%s in %s:%d',
+        $stage ?? 'unknown', $requestId,
+        get_class($e), $sqlState, $dbErrNo,
+        $e->getMessage(), $e->getFile(), $e->getLine()
     ));
-    ssaApiJsonResponse(500, ['error' => 'server_error', 'message' => 'Unable to process package assignment.']);
+    ssaApiJsonResponse(500, [
+        'error'     => 'package_assignment_failed',
+        'message'   => 'The membership package could not be assigned.',
+        'requestId' => $requestId,
+    ]);
 }

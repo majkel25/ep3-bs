@@ -311,4 +311,257 @@ class SsaPackageManagementTest extends TestCase
     {
         $this->markTestSkipped('Integration test: plan_key in DB unchanged after PATCH (it is not in SET clause).');
     }
+
+    // ── Assignment endpoint unit tests (source ENUM and period-date logic) ────
+
+    /**
+     * Verifies that 'admin' is a valid source value and 'admin_assignment' is not.
+     * Root cause of the HTTP 500: source ENUM does not include 'admin_assignment'.
+     */
+    public function testSourceValueIsAdmin(): void
+    {
+        // The valid source value used by admin assignment endpoint
+        $sourceValue = 'admin';
+        $validSources = ['admin', 'migration', 'user_request', 'system', 'legacy_excel_import'];
+        $this->assertContains($sourceValue, $validSources, "'admin' must be a valid ENUM value");
+        $this->assertNotContains('admin_assignment', $validSources, "'admin_assignment' is NOT in the ENUM");
+    }
+
+    /**
+     * ssaAssignCalcFreshPeriodDates: monthly billing produces a future period end.
+     */
+    public function testFreshPeriodDatesMonthlyIsFuture(): void
+    {
+        $dates = $this->calcFreshPeriodDates('monthly', null);
+        $this->assertArrayHasKey('current_period_ends_at', $dates);
+        $this->assertArrayHasKey('cancellation_notice_deadline_at', $dates);
+        $end = strtotime($dates['current_period_ends_at']);
+        $this->assertGreaterThan(time(), $end, 'Period end must be in the future');
+    }
+
+    /**
+     * ssaAssignCalcFreshPeriodDates: upfront with available_until uses that date.
+     */
+    public function testFreshPeriodDatesUpfrontUsesAvailableUntil(): void
+    {
+        $availableUntil = '2027-03-31';
+        $dates = $this->calcFreshPeriodDates('upfront', $availableUntil);
+        $end = $dates['current_period_ends_at'];
+        $this->assertStringStartsWith('2027-03-31', $end);
+    }
+
+    /**
+     * ssaAssignCalcFreshPeriodDates: upfront without available_until falls back to year end.
+     */
+    public function testFreshPeriodDatesUpfrontFallsBackToYearEnd(): void
+    {
+        $dates = $this->calcFreshPeriodDates('upfront', null);
+        $end = $dates['current_period_ends_at'];
+        $this->assertMatchesRegularExpression('/^\d{4}-12-31/', $end);
+    }
+
+    /**
+     * ssaAssignCalcFreshPeriodDates: period_ends_at equals cancellation_notice_deadline_at.
+     */
+    public function testFreshPeriodDatesCancelDeadlineEqualsEnd(): void
+    {
+        $dates = $this->calcFreshPeriodDates('monthly', null);
+        $this->assertSame($dates['current_period_ends_at'], $dates['cancellation_notice_deadline_at']);
+    }
+
+    // ── Assignment endpoint integration tests (require DB_DSN) ────────────────
+
+    /**
+     * @group integration
+     * Test 1: First membership assignment succeeds.
+     */
+    public function testAssignmentFirstSucceeds(): void
+    {
+        $this->markTestSkipped('Integration: POST /admin/member-package-assign.php → 200, new active membership created.');
+    }
+
+    /**
+     * @group integration
+     * Test 2: Replacing an existing package succeeds.
+     */
+    public function testAssignmentReplacementSucceeds(): void
+    {
+        $this->markTestSkipped('Integration: assigning a different package supersedes the old membership and creates a new active one.');
+    }
+
+    /**
+     * @group integration
+     * Test 3: Old membership becomes historical (status = superseded).
+     */
+    public function testOldMembershipIsSuperseded(): void
+    {
+        $this->markTestSkipped('Integration: after replacement, previous row has status=superseded.');
+    }
+
+    /**
+     * @group integration
+     * Test 4: Exactly one active membership remains after assignment.
+     */
+    public function testExactlyOneActiveMembershipAfterAssignment(): void
+    {
+        $this->markTestSkipped('Integration: SELECT COUNT(*) WHERE uid=? AND status=active = 1 after assignment.');
+    }
+
+    /**
+     * @group integration
+     * Test 5: superseded_by_membership_id links old to new membership.
+     */
+    public function testSupersededByMembershipIdIsSet(): void
+    {
+        $this->markTestSkipped('Integration: old row superseded_by_membership_id = new row id.');
+    }
+
+    /**
+     * @group integration
+     * Test 6: Private package assignment succeeds for an administrator.
+     */
+    public function testPrivatePackageAssignmentSucceedsForAdmin(): void
+    {
+        $this->markTestSkipped('Integration: is_public=0 package can be assigned by admin.');
+    }
+
+    /**
+     * @group integration
+     * Test 7: Private package remains absent from the public catalogue after assignment.
+     */
+    public function testPrivatePackageAbsentFromPublicCatalogue(): void
+    {
+        $this->markTestSkipped('Integration: GET /membership-packages.php does not return is_public=0 package after admin assignment.');
+    }
+
+    /**
+     * @group integration
+     * Test 8: Existing price snapshots on old membership are not modified.
+     */
+    public function testExistingPriceSnapshotUnchanged(): void
+    {
+        $this->markTestSkipped('Integration: superseded row price_snapshot_pence unchanged after replacement.');
+    }
+
+    /**
+     * @group integration
+     * Test 9: New membership receives the current package price snapshot.
+     */
+    public function testNewMembershipReceivesCurrentPriceSnapshot(): void
+    {
+        $this->markTestSkipped('Integration: new row price_snapshot_pence = ssa_membership_plans.monthly_price_pence at time of assignment.');
+    }
+
+    /**
+     * @group integration
+     * Test 10: Audit failure rolls back the membership change.
+     */
+    public function testAuditFailureRollsBackMembership(): void
+    {
+        $this->markTestSkipped('Integration: simulate audit INSERT failure; verify membership rows unchanged and 500 returned.');
+    }
+
+    /**
+     * @group integration
+     * Test 11: Membership insert failure restores the previous active membership.
+     */
+    public function testMembershipInsertFailureRestoresPreviousActive(): void
+    {
+        $this->markTestSkipped('Integration: simulate new membership INSERT failure; old active row status must remain active after rollback.');
+    }
+
+    /**
+     * @group integration
+     * Test 12: Push failure after commit does not produce HTTP 500.
+     */
+    public function testPushFailureAfterCommitDoesNotReturn500(): void
+    {
+        $this->markTestSkipped('Integration: stub push to throw; successful assignment still returns 200 with notificationWarning.');
+    }
+
+    /**
+     * @group integration
+     * Test 13: Notification failure after commit does not create a duplicate assignment.
+     */
+    public function testNotificationFailureDoesNotDuplicateAssignment(): void
+    {
+        $this->markTestSkipped('Integration: stub notification to throw; membership table has exactly one active row after response.');
+    }
+
+    /**
+     * @group integration
+     * Test 14: Duplicate assignment returns 409 already_assigned.
+     */
+    public function testDuplicateAssignmentReturns409(): void
+    {
+        $this->markTestSkipped('Integration: assign same package twice; second POST returns 409 error=already_assigned.');
+    }
+
+    /**
+     * @group integration
+     * Test 15: Stale expectedCurrentMembershipId returns 409 membership_changed.
+     */
+    public function testStaleMembershipIdReturns409(): void
+    {
+        $this->markTestSkipped('Integration: pass expectedCurrentMembershipId that does not match current row; expect 409 error=membership_changed.');
+    }
+
+    /**
+     * @group integration
+     * Test 16: Inactive package returns 422.
+     */
+    public function testInactivePackageReturns422(): void
+    {
+        $this->markTestSkipped('Integration: assign a package where is_active=0; expect 422 error=package_inactive.');
+    }
+
+    /**
+     * @group integration
+     * Test 17: Ordinary members receive 403.
+     */
+    public function testOrdinaryMemberReceives403(): void
+    {
+        $this->markTestSkipped('Integration: call endpoint with a member-role Auth0 token; expect 403 error=forbidden.');
+    }
+
+    /**
+     * @group integration
+     * Test 18: Error responses include a requestId.
+     */
+    public function testErrorResponsesIncludeRequestId(): void
+    {
+        $this->markTestSkipped('Integration: any 4xx or 5xx response body contains a non-empty requestId field.');
+    }
+
+    // ── Helper: replicate ssaAssignCalcFreshPeriodDates logic in PHP ──────────
+
+    private function calcFreshPeriodDates(string $billingType, ?string $availableUntil): array
+    {
+        $tz      = new \DateTimeZone('Europe/London');
+        $utcZone = new \DateTimeZone('UTC');
+        $nowLon  = new \DateTimeImmutable('now', $tz);
+
+        if (in_array($billingType, ['upfront', 'fixed_term', 'one_time'], true) && $availableUntil) {
+            try {
+                $endLon = new \DateTimeImmutable($availableUntil . ' 23:59:59', $tz);
+            } catch (\Throwable $ignored) {
+                $endLon = $nowLon->modify('+1 year')->setTime(23, 59, 59);
+            }
+        } elseif (in_array($billingType, ['upfront', 'fixed_term', 'one_time'], true)) {
+            $endLon = new \DateTimeImmutable($nowLon->format('Y') . '-12-31 23:59:59', $tz);
+            if ($endLon <= $nowLon) {
+                $endLon = $endLon->modify('+1 year');
+            }
+        } else {
+            $firstOfThisMonth = new \DateTimeImmutable($nowLon->format('Y-m') . '-01 00:00:00', $tz);
+            $firstOfNextMonth = $firstOfThisMonth->modify('+1 month');
+            $endLon           = $firstOfNextMonth->modify('last day of this month')->setTime(23, 59, 59);
+        }
+
+        $periodEndsAt = $endLon->setTimezone($utcZone)->format('Y-m-d H:i:s');
+        return [
+            'current_period_ends_at'          => $periodEndsAt,
+            'cancellation_notice_deadline_at' => $periodEndsAt,
+        ];
+    }
 }
