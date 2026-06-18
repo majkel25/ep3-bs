@@ -519,11 +519,20 @@ try {
 
     // ── APPLY ──────────────────────────────────────────────────────────────
 
-    // Gate: no unresolved
-    $unresolved = array_filter($results, fn($r) => $r['status'] === 'unresolved');
+    // Gate: no unresolved (pass ?confirm_suggestions=1&skip_unresolved=1 to override)
+    $confirmSuggestions = ($_GET['confirm_suggestions'] ?? '') === '1';
+    $skipUnresolved     = ($_GET['skip_unresolved'] ?? '') === '1';
+    $unresolved = array_filter($results, fn($r) => $r['status'] === 'unresolved' && !($confirmSuggestions && $r['is_suggestion']) && !($skipUnresolved && !$r['is_suggestion'] && $r['matched_uid'] === null));
     if (!empty($unresolved)) {
         echo json_encode(['error' => count($unresolved) . ' unresolved rows', 'rows' => array_values($unresolved), 'log' => $log]);
         exit;
+    }
+    // Promote confirmed suggestions to resolved so they get imported
+    if ($confirmSuggestions) {
+        foreach ($results as &$r) {
+            if ($r['is_suggestion']) { $r['is_suggestion'] = false; $r['status'] = 'resolved'; }
+        }
+        unset($r);
     }
     $errors = array_filter($results, fn($r) => $r['status'] === 'error');
     if (!empty($errors)) {
