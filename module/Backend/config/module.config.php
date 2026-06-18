@@ -203,6 +203,43 @@ return array(
                             ),
                         ),
                     ),
+                    'content-legal' => array(
+                        'type' => 'Literal',
+                        'options' => array(
+                            'route' => '/content-legal',
+                            'defaults' => array(
+                                'controller' => 'Backend\Controller\ContentLegal',
+                                'action' => 'index',
+                            ),
+                        ),
+                        'may_terminate' => true,
+                        'child_routes' => array(
+                            'packages' => array(
+                                'type' => 'Literal',
+                                'options' => array(
+                                    'route' => '/membership-packages',
+                                    'defaults' => array(
+                                        'action' => 'packages',
+                                    ),
+                                ),
+                                'may_terminate' => true,
+                                'child_routes' => array(
+                                    'edit' => array(
+                                        'type' => 'Segment',
+                                        'options' => array(
+                                            'route' => '/edit[/:id]',
+                                            'defaults' => array(
+                                                'action' => 'packageEdit',
+                                            ),
+                                            'constraints' => array(
+                                                'id' => '[0-9]+',
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
                     'config' => array(
                         'type' => 'Literal',
                         'options' => array(
@@ -389,6 +426,7 @@ return array(
             'Backend\Controller\Event' => 'Backend\Controller\EventController',
             'Backend\Controller\Config' => 'Backend\Controller\ConfigController',
             'Backend\Controller\ConfigSquare' => 'Backend\Controller\ConfigSquareController',
+            'Backend\Controller\ContentLegal' => 'Backend\Controller\ContentLegalController',
         ),
     ),
 

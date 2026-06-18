@@ -1,0 +1,32 @@
+<?php
+
+$this->setup([
+    'title' => 'Content & Legal',
+    'panel' => 'centered-panel large-sized',
+    'back'  => true,
+]);
+
+?>
+
+<div>
+    <h1 class="no-ajax"><?= $this->t('Content & Legal') ?></h1>
+
+    <div class="no-ajax separator-small"></div>
+
+    <p class="gray">Manage membership packages, policies, and legal content.</p>
+
+    <div class="no-ajax separator-small"></div>
+
+    <table class="default-table middle-table" style="max-width: 700px;">
+        <tr>
+            <td style="width: 200px;">
+                <a href="<?= $this->url('backend/content-legal/packages') ?>" class="default-button" style="width: 180px; text-align: left;">
+                    <span class="symbolic symbolic-config"><?= $this->t('Membership Packages') ?></span>
+                </a>
+            </td>
+            <td>
+                <p class="gray" style="margin: 0;">View and edit all membership package definitions, prices, and visibility settings.</p>
+            </td>
+        </tr>
+    </table>
+</div>

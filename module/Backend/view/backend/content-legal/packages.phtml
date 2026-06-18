@@ -1,0 +1,199 @@
+<?php
+
+$this->setup([
+    'title' => 'Membership Packages',
+    'panel' => 'centered-panel large-sized',
+    'back'  => true,
+]);
+
+$packages = $this->packages ?? [];
+$search   = $this->search ?? '';
+$filters  = $this->filters ?? [];
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function clpTier(string $planKey, ?string $parentPlanKey = null): string
+{
+    $ref = strtolower($parentPlanKey ?? $planKey);
+    $key = strtolower($planKey);
+    if ($ref === 'red'  || str_starts_with($key, 'red'))   return 'Red';
+    if ($ref === 'pink' || str_starts_with($key, 'pink'))  return 'Pink';
+    if ($ref === 'black'|| str_starts_with($key, 'black')) return 'Black';
+    if ($ref === 'gold' || $key === 'gold')                return 'Gold';
+    if (str_starts_with($key, 'summer'))                   return 'Summer';
+    return 'Special';
+}
+
+function clpVariant(string $planKey): string
+{
+    $key = strtolower($planKey);
+    if (str_contains($key, '_nhs_upfront'))   return 'Upfront NHS';
+    if (str_contains($key, '_junior'))         return 'Junior';
+    if (str_contains($key, '_nhs'))            return 'NHS';
+    if (str_contains($key, '_police'))         return 'Police';
+    if (str_contains($key, '_senior'))         return 'Senior';
+    if (str_contains($key, '_student'))        return 'Student';
+    if (str_contains($key, '_standard_upfront') || (str_contains($key, '_upfront') && !str_contains($key, '_nhs'))) return 'Upfront';
+    if (str_contains($key, '_discounted'))     return 'Discounted';
+    if ($key === 'concession')                 return 'Concession';
+    if ($key === 'coach')                      return 'Coach';
+    if (str_contains($key, 'special'))         return 'Special';
+    return 'Standard';
+}
+
+function clpPriceDisplay(int $pence, string $currency, string $billingType = 'monthly'): string
+{
+    $symbol = strtoupper($currency) === 'GBP' ? '£' : strtoupper($currency) . ' ';
+    $pounds = $pence / 100;
+    $formatted = ($pounds == floor($pounds))
+        ? $symbol . number_format((int)$pounds)
+        : $symbol . number_format($pounds, 2);
+    return $billingType === 'monthly' ? $formatted . '/month' : $formatted;
+}
+
+function clpBillingLabel(string $billingType): string
+{
+    return match($billingType) {
+        'monthly'    => 'Monthly',
+        'upfront'    => 'Upfront',
+        'fixed_term' => 'Fixed Term',
+        'other'      => 'Other',
+        default      => ucfirst($billingType),
+    };
+}
+
+?>
+
+<div>
+    <h1 class="no-ajax"><?= $this->t('Membership Packages') ?></h1>
+    <div class="no-ajax separator-small"></div>
+
+    <!-- Flash messages -->
+    <?php foreach ($this->flashMessenger()->getSuccessMessages() as $msg): ?>
+        <div class="success-message" style="padding: 10px; background: #e6f4ea; border: 1px solid #4caf50; border-radius: 4px; margin-bottom: 12px;">
+            <?= $this->e($msg) ?>
+        </div>
+    <?php endforeach; ?>
+    <?php foreach ($this->flashMessenger()->getErrorMessages() as $msg): ?>
+        <div class="error-message" style="padding: 10px; background: #fdecea; border: 1px solid #f44336; border-radius: 4px; margin-bottom: 12px;">
+            <?= $this->e($msg) ?>
+        </div>
+    <?php endforeach; ?>
+
+    <!-- Search / filter form -->
+    <form method="GET" action="<?= $this->url('backend/content-legal/packages') ?>" style="margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end;">
+        <div>
+            <label style="display: block; font-size: 12px; color: #666; margin-bottom: 2px;">Search</label>
+            <input type="text" name="search" value="<?= $this->e($search) ?>" placeholder="Name or code…"
+                   style="padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; width: 220px;" />
+        </div>
+        <div>
+            <label style="display: block; font-size: 12px; color: #666; margin-bottom: 2px;">Tier</label>
+            <select name="tier" style="padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;">
+                <option value="">All Tiers</option>
+                <?php foreach (['red' => 'Red', 'pink' => 'Pink', 'black' => 'Black', 'gold' => 'Gold', 'summer' => 'Summer', 'special' => 'Special'] as $val => $label): ?>
+                    <option value="<?= $val ?>" <?= ($filters['tier'] ?? '') === $val ? 'selected' : '' ?>><?= $label ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div>
+            <label style="display: block; font-size: 12px; color: #666; margin-bottom: 2px;">Visibility</label>
+            <select name="visibility" style="padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;">
+                <option value="">All</option>
+                <option value="public" <?= ($filters['visibility'] ?? '') === 'public' ? 'selected' : '' ?>>Public</option>
+                <option value="assigned_only" <?= ($filters['visibility'] ?? '') === 'assigned_only' ? 'selected' : '' ?>>Assigned Only</option>
+            </select>
+        </div>
+        <div>
+            <label style="display: block; font-size: 12px; color: #666; margin-bottom: 2px;">Status</label>
+            <select name="active" style="padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px;">
+                <option value="">All</option>
+                <option value="active" <?= ($filters['active'] ?? '') === 'active' ? 'selected' : '' ?>>Active</option>
+                <option value="inactive" <?= ($filters['active'] ?? '') === 'inactive' ? 'selected' : '' ?>>Inactive</option>
+            </select>
+        </div>
+        <div>
+            <button type="submit" class="default-button" style="padding: 6px 16px;">Filter</button>
+            <a href="<?= $this->url('backend/content-legal/packages') ?>" class="unlined gray" style="margin-left: 8px; font-size: 13px;">Reset</a>
+        </div>
+    </form>
+
+    <p class="gray" style="margin-bottom: 12px;"><?= count($packages) ?> package(s) found</p>
+
+    <?php if (empty($packages)): ?>
+        <p class="gray">No packages found matching your filters.</p>
+    <?php else: ?>
+    <table class="default-table" style="width: 100%;">
+        <thead>
+            <tr>
+                <th style="text-align: left; padding: 8px;">Name</th>
+                <th style="text-align: left; padding: 8px;">Code</th>
+                <th style="text-align: left; padding: 8px;">Tier</th>
+                <th style="text-align: left; padding: 8px;">Variant</th>
+                <th style="text-align: right; padding: 8px;">Price</th>
+                <th style="text-align: left; padding: 8px;">Billing</th>
+                <th style="text-align: left; padding: 8px;">Visibility</th>
+                <th style="text-align: left; padding: 8px;">Status</th>
+                <th style="text-align: left; padding: 8px;">Updated</th>
+                <th style="text-align: left; padding: 8px;">Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+        <?php foreach ($packages as $pkg): ?>
+            <?php
+            $planKey       = (string)$pkg['plan_key'];
+            $parentPlanKey = isset($pkg['parent_plan_key']) ? (string)$pkg['parent_plan_key'] : null;
+            $tier          = isset($pkg['tier']) ? (string)$pkg['tier'] : clpTier($planKey, $parentPlanKey);
+            $variant       = isset($pkg['variant']) ? (string)$pkg['variant'] : clpVariant($planKey);
+            $pricePence    = (int)($pkg['monthly_price_pence'] ?? 0);
+            $currency      = (string)($pkg['currency'] ?? 'GBP');
+            $billingType   = (string)($pkg['billing_type'] ?? 'monthly');
+            $isPublic      = (bool)(int)($pkg['is_public'] ?? 0);
+            $isActive      = (bool)(int)($pkg['is_active'] ?? 1);
+            $availFrom     = $pkg['available_from'] ?? null;
+            $availUntil    = $pkg['available_until'] ?? null;
+            $isSeasonal    = ($availFrom !== null || $availUntil !== null);
+            $updatedAt     = $pkg['updated_at'] ?? $pkg['created_at'] ?? null;
+            ?>
+            <tr>
+                <td style="padding: 8px;">
+                    <?= $this->e($pkg['display_name'] ?? $pkg['name'] ?? '') ?>
+                    <?php if ($isSeasonal): ?>
+                        <span title="Seasonal: <?= $this->e(($availFrom ?? '?') . ' to ' . ($availUntil ?? '?')) ?>"
+                              style="color: #888; font-size: 12px; margin-left: 4px;">(Seasonal)</span>
+                    <?php endif; ?>
+                </td>
+                <td style="padding: 8px; font-family: monospace; font-size: 12px; color: #555;">
+                    <?= $this->e($planKey) ?>
+                </td>
+                <td style="padding: 8px;"><?= $this->e($tier) ?></td>
+                <td style="padding: 8px; color: #666; font-size: 13px;"><?= $this->e($variant) ?></td>
+                <td style="padding: 8px; text-align: right;"><?= $this->e(clpPriceDisplay($pricePence, $currency, $billingType)) ?></td>
+                <td style="padding: 8px; font-size: 13px; color: #666;"><?= $this->e(clpBillingLabel($billingType)) ?></td>
+                <td style="padding: 8px;">
+                    <?php if ($isPublic): ?>
+                        <span style="background: #e6f4ea; color: #2e7d32; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600;">Public</span>
+                    <?php else: ?>
+                        <span style="background: #fff3e0; color: #e65100; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600;">Assigned only</span>
+                    <?php endif; ?>
+                </td>
+                <td style="padding: 8px;">
+                    <?php if ($isActive): ?>
+                        <span style="background: #e6f4ea; color: #2e7d32; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600;">Active</span>
+                    <?php else: ?>
+                        <span style="background: #f5f5f5; color: #757575; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600;">Inactive</span>
+                    <?php endif; ?>
+                </td>
+                <td style="padding: 8px; font-size: 12px; color: #888;">
+                    <?= $updatedAt ? $this->e(substr((string)$updatedAt, 0, 16)) : '—' ?>
+                </td>
+                <td style="padding: 8px;">
+                    <a href="<?= $this->url('backend/content-legal/packages/edit', ['id' => (int)$pkg['id']]) ?>"
+                       class="default-button" style="padding: 4px 12px; font-size: 13px;">Edit</a>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+    <?php endif; ?>
+</div>

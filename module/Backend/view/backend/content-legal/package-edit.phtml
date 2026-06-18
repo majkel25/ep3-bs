@@ -1,0 +1,287 @@
+<?php
+
+$this->setup([
+    'title' => 'Edit Package',
+    'panel' => 'centered-panel large-sized',
+    'back'  => true,
+]);
+
+$package      = $this->package ?? [];
+$auditHistory = $this->auditHistory ?? [];
+$formErrors   = $this->formErrors ?? [];
+
+$planKey       = (string)($package['plan_key'] ?? '');
+$displayName   = (string)($package['display_name'] ?? $package['name'] ?? '');
+$description   = (string)($package['description'] ?? '');
+$pricePence    = (int)($package['monthly_price_pence'] ?? 0);
+$currency      = (string)($package['currency'] ?? 'GBP');
+$billingType   = (string)($package['billing_type'] ?? 'monthly');
+$isPublic      = (bool)(int)($package['is_public'] ?? 0);
+$isActive      = (bool)(int)($package['is_active'] ?? 1);
+$availableFrom = $package['available_from'] ?? '';
+$availableUntil = $package['available_until'] ?? '';
+$updatedAt     = $package['updated_at'] ?? $package['created_at'] ?? '';
+
+$priceDisplay = number_format($pricePence / 100, 2, '.', '');
+
+?>
+
+<div>
+    <h1 class="no-ajax"><?= $this->t('Edit Package') ?>: <?= $this->e($displayName) ?></h1>
+    <p class="gray" style="font-family: monospace; font-size: 13px;"><?= $this->e($planKey) ?></p>
+
+    <div class="no-ajax separator-small"></div>
+
+    <!-- Flash messages -->
+    <?php foreach ($this->flashMessenger()->getSuccessMessages() as $msg): ?>
+        <div id="flash-success" style="padding: 10px; background: #e6f4ea; border: 1px solid #4caf50; border-radius: 4px; margin-bottom: 12px;">
+            <?= $this->e($msg) ?>
+        </div>
+    <?php endforeach; ?>
+    <?php foreach ($this->flashMessenger()->getErrorMessages() as $msg): ?>
+        <div style="padding: 10px; background: #fdecea; border: 1px solid #f44336; border-radius: 4px; margin-bottom: 12px;">
+            <?= $this->e($msg) ?>
+        </div>
+    <?php endforeach; ?>
+    <?php foreach ($formErrors as $err): ?>
+        <div style="padding: 10px; background: #fdecea; border: 1px solid #f44336; border-radius: 4px; margin-bottom: 8px;">
+            <?= $this->e($err) ?>
+        </div>
+    <?php endforeach; ?>
+
+    <form method="POST" action="" id="package-edit-form" style="max-width: 700px;">
+
+        <!-- Hidden concurrency token -->
+        <input type="hidden" name="updated_at_check" value="<?= $this->e($updatedAt) ?>" />
+
+        <!-- Package Code (read-only) -->
+        <div style="margin-bottom: 20px;">
+            <label style="display: block; font-weight: 600; margin-bottom: 4px;">Package Code</label>
+            <input type="text" value="<?= $this->e($planKey) ?>" disabled
+                   style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; width: 100%;
+                          background: #f5f5f5; color: #888; font-family: monospace;" />
+            <p class="gray" style="font-size: 12px; margin-top: 4px;">Package codes are permanent and cannot be changed.</p>
+        </div>
+
+        <!-- Display Name -->
+        <div style="margin-bottom: 20px;">
+            <label for="displayName" style="display: block; font-weight: 600; margin-bottom: 4px;">
+                Display Name <span style="color: #e53935;">*</span>
+            </label>
+            <input type="text" id="displayName" name="displayName"
+                   value="<?= $this->e($displayName) ?>"
+                   maxlength="128" required
+                   style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; width: 100%;" />
+        </div>
+
+        <!-- Description -->
+        <div style="margin-bottom: 20px;">
+            <label for="description" style="display: block; font-weight: 600; margin-bottom: 4px;">Description</label>
+            <textarea id="description" name="description" maxlength="2000" rows="5"
+                      style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; width: 100%;"><?= $this->e($description) ?></textarea>
+            <p class="gray" style="font-size: 12px; margin-top: 4px;">Max 2000 characters.</p>
+        </div>
+
+        <!-- Price -->
+        <div style="margin-bottom: 20px;">
+            <label for="price" style="display: block; font-weight: 600; margin-bottom: 4px;">
+                Price (<?= $this->e($currency) ?>) <span style="color: #e53935;">*</span>
+            </label>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 16px; color: #555;">£</span>
+                <input type="number" id="price" name="price"
+                       value="<?= $this->e($priceDisplay) ?>"
+                       min="0" max="9999" step="0.01" required
+                       style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; width: 160px;" />
+            </div>
+            <input type="hidden" name="currency" value="<?= $this->e($currency) ?>" />
+            <p class="gray" style="font-size: 12px; margin-top: 4px;">
+                Changing the price affects new assignments and renewals only.
+                Existing membership records retain their snapshot price.
+            </p>
+        </div>
+
+        <!-- Billing Type -->
+        <div style="margin-bottom: 20px;">
+            <label for="billingType" style="display: block; font-weight: 600; margin-bottom: 4px;">Billing Type</label>
+            <select id="billingType" name="billingType"
+                    style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; width: 240px;">
+                <option value="monthly"    <?= $billingType === 'monthly'    ? 'selected' : '' ?>>Monthly</option>
+                <option value="upfront"    <?= $billingType === 'upfront'    ? 'selected' : '' ?>>Upfront</option>
+                <option value="fixed_term" <?= $billingType === 'fixed_term' ? 'selected' : '' ?>>Fixed Term</option>
+                <option value="other"      <?= $billingType === 'other'      ? 'selected' : '' ?>>Other</option>
+            </select>
+        </div>
+
+        <!-- Visibility -->
+        <div style="margin-bottom: 20px;">
+            <label style="display: block; font-weight: 600; margin-bottom: 8px;">Visibility</label>
+            <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;">
+                <input type="radio" name="isPublic" value="1" <?= $isPublic ? 'checked' : '' ?> />
+                <span>
+                    <strong>Public</strong>
+                    <span class="gray" style="font-size: 13px; display: block;">Visible in the general member package catalogue.</span>
+                </span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="radio" name="isPublic" value="0" <?= !$isPublic ? 'checked' : '' ?> />
+                <span>
+                    <strong>Assigned members only</strong>
+                    <span class="gray" style="font-size: 13px; display: block;">Not shown in the general catalogue. Only members directly assigned to this package see it.</span>
+                </span>
+            </label>
+        </div>
+
+        <!-- Status -->
+        <div style="margin-bottom: 20px;">
+            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                <input type="checkbox" name="isActive" value="1" id="isActive" <?= $isActive ? 'checked' : '' ?>
+                       style="width: 18px; height: 18px;" />
+                <span>
+                    <strong>Active</strong>
+                    <span class="gray" style="font-size: 13px; display: block; margin-top: 2px;">Inactive packages cannot receive new member assignments.</span>
+                </span>
+            </label>
+        </div>
+
+        <!-- Availability dates -->
+        <div style="margin-bottom: 20px;">
+            <label style="display: block; font-weight: 600; margin-bottom: 8px;">Availability Window (optional — for seasonal packages)</label>
+            <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+                <div>
+                    <label for="availableFrom" style="display: block; font-size: 13px; color: #666; margin-bottom: 4px;">Available From</label>
+                    <input type="date" id="availableFrom" name="availableFrom"
+                           value="<?= $this->e($availableFrom) ?>"
+                           style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px;" />
+                </div>
+                <div>
+                    <label for="availableUntil" style="display: block; font-size: 13px; color: #666; margin-bottom: 4px;">Available Until</label>
+                    <input type="date" id="availableUntil" name="availableUntil"
+                           value="<?= $this->e($availableUntil) ?>"
+                           style="padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px;" />
+                </div>
+            </div>
+            <p class="gray" style="font-size: 12px; margin-top: 4px;">Leave blank for packages available year-round.</p>
+        </div>
+
+        <!-- Submit -->
+        <div style="margin-top: 28px; display: flex; gap: 12px; align-items: center;">
+            <button type="submit" id="submit-btn" class="default-button">Save Changes</button>
+            <a href="<?= $this->url('backend/content-legal/packages') ?>" class="unlined gray">Cancel</a>
+        </div>
+
+    </form>
+
+    <!-- ── Audit history ──────────────────────────────────────────────────── -->
+    <div style="margin-top: 48px;">
+        <h2 style="font-size: 16px; font-weight: 600; margin-bottom: 12px;">Change History</h2>
+
+        <?php if (empty($auditHistory)): ?>
+            <p class="gray">No changes recorded yet.</p>
+        <?php else: ?>
+        <table class="default-table" style="width: 100%; font-size: 13px;">
+            <thead>
+                <tr>
+                    <th style="text-align: left; padding: 6px 8px;">Date</th>
+                    <th style="text-align: left; padding: 6px 8px;">Admin</th>
+                    <th style="text-align: left; padding: 6px 8px;">Fields Changed</th>
+                    <th style="text-align: left; padding: 6px 8px;">Summary</th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($auditHistory as $entry): ?>
+                <?php
+                $changedFields = [];
+                $oldVals = [];
+                $newVals = [];
+                if (isset($entry['changed_fields_json']) && $entry['changed_fields_json']) {
+                    $cf = json_decode((string)$entry['changed_fields_json'], true);
+                    if (is_array($cf)) $changedFields = $cf;
+                }
+                if (isset($entry['old_values_json']) && $entry['old_values_json']) {
+                    $ov = json_decode((string)$entry['old_values_json'], true);
+                    if (is_array($ov)) $oldVals = $ov;
+                }
+                if (isset($entry['new_values_json']) && $entry['new_values_json']) {
+                    $nv = json_decode((string)$entry['new_values_json'], true);
+                    if (is_array($nv)) $newVals = $nv;
+                }
+                $adminName = (string)($entry['admin_alias'] ?? $entry['admin_name_snapshot'] ?? 'Unknown');
+
+                $summaryParts = [];
+                foreach ($changedFields as $field) {
+                    $old = $oldVals[$field] ?? '';
+                    $new = $newVals[$field] ?? '';
+                    $summaryParts[] = $field . ': ' . (string)$old . ' → ' . (string)$new;
+                }
+                ?>
+                <tr>
+                    <td style="padding: 6px 8px; white-space: nowrap; color: #888;">
+                        <?= $this->e(substr((string)($entry['created_at'] ?? ''), 0, 16)) ?>
+                    </td>
+                    <td style="padding: 6px 8px;"><?= $this->e($adminName) ?></td>
+                    <td style="padding: 6px 8px; color: #555;">
+                        <?= $this->e(implode(', ', $changedFields)) ?>
+                    </td>
+                    <td style="padding: 6px 8px; color: #444;">
+                        <?= $this->e(implode('; ', $summaryParts)) ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+        <?php endif; ?>
+    </div>
+</div>
+
+<script>
+(function () {
+    var form = document.getElementById('package-edit-form');
+    var submitBtn = document.getElementById('submit-btn');
+    var originalPrice = <?= json_encode($priceDisplay) ?>;
+    var originalIsPublic = <?= json_encode($isPublic ? '1' : '0') ?>;
+    var originalIsActive = <?= json_encode($isActive ? '1' : '0') ?>;
+
+    if (!form) return;
+
+    form.addEventListener('submit', function (e) {
+        var priceField = document.getElementById('price');
+        var newPrice = priceField ? priceField.value : originalPrice;
+
+        var isPublicRadios = document.querySelectorAll('input[name="isPublic"]');
+        var newIsPublic = '0';
+        isPublicRadios.forEach(function (r) { if (r.checked) newIsPublic = r.value; });
+
+        var isActiveChk = document.getElementById('isActive');
+        var newIsActive = (isActiveChk && isActiveChk.checked) ? '1' : '0';
+
+        // Price changed?
+        if (newPrice !== originalPrice) {
+            if (!confirm('This changes the price for new assignments and renewals. Existing membership records will not be changed. Continue?')) {
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // Visibility changed from public to assigned_only?
+        if (originalIsPublic === '1' && newIsPublic === '0') {
+            if (!confirm('This package will no longer appear in the general member package catalogue. Members already assigned to it will continue to see their own package. Continue?')) {
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // Deactivating?
+        if (originalIsActive === '1' && newIsActive === '0') {
+            if (!confirm('Deactivating this package will prevent new assignments. Continue?')) {
+                e.preventDefault();
+                return;
+            }
+        }
+
+        // Prevent double-submit
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving…';
+    });
+})();
+</script>

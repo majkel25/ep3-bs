@@ -105,7 +105,8 @@ try {
             p.monthly_price_pence,
             p.currency,
             p.table_access_summary,
-            p.coaching_summary
+            p.coaching_summary,
+            p.is_public
          FROM ssa_user_memberships m
          INNER JOIN ssa_membership_plans p ON p.id = m.plan_id
          WHERE m.uid = :uid AND m.status = :status
@@ -141,6 +142,38 @@ try {
             'description' => $r['description'],
         ], $benefitsStmt->fetchAll(PDO::FETCH_ASSOC)));
 
+        // Derive tier/variant/billingType for currentMembership
+        $cmPlanKey = (string)$activeMembership['plan_key'];
+        $cmBillingType = 'monthly';
+        // billing_type may be on the plan row if the column exists (we don't JOIN it here but we can detect from plan_key)
+        // Use a simple check: upfront plans
+        if (str_contains(strtolower($cmPlanKey), '_upfront')) {
+            $cmBillingType = 'upfront';
+        } elseif ($cmPlanKey === 'PINK_STANDARD_UPFRONT') {
+            $cmBillingType = 'fixed_term';
+        }
+
+        $cmTier = 'Special';
+        $cmKey = strtolower($cmPlanKey);
+        if (str_starts_with($cmKey, 'red'))    $cmTier = 'Red';
+        elseif (str_starts_with($cmKey, 'pink'))  $cmTier = 'Pink';
+        elseif (str_starts_with($cmKey, 'black')) $cmTier = 'Black';
+        elseif (str_starts_with($cmKey, 'gold') || $cmKey === 'pro-package') $cmTier = 'Gold';
+        elseif (str_starts_with($cmKey, 'summer')) $cmTier = 'Summer';
+
+        $cmVariant = 'Standard';
+        if (str_contains($cmKey, '_nhs_upfront'))   $cmVariant = 'Upfront NHS';
+        elseif (str_contains($cmKey, '_junior'))     $cmVariant = 'Junior';
+        elseif (str_contains($cmKey, '_nhs'))        $cmVariant = 'NHS';
+        elseif (str_contains($cmKey, '_police'))     $cmVariant = 'Police';
+        elseif (str_contains($cmKey, '_senior'))     $cmVariant = 'Senior';
+        elseif (str_contains($cmKey, '_student'))    $cmVariant = 'Student';
+        elseif (str_contains($cmKey, '_standard_upfront') || (str_contains($cmKey, '_upfront') && !str_contains($cmKey, '_nhs'))) $cmVariant = 'Upfront';
+        elseif (str_contains($cmKey, '_discounted')) $cmVariant = 'Discounted';
+        elseif ($cmKey === 'concession')             $cmVariant = 'Concession';
+        elseif ($cmKey === 'coach')                  $cmVariant = 'Coach';
+        elseif (str_contains($cmKey, 'special'))     $cmVariant = 'Special';
+
         $currentMembership = [
             'id' => (int)$activeMembership['id'],
             'planKey' => $activeMembership['plan_key'],
@@ -149,6 +182,10 @@ try {
             'pricePence' => $pricePence,
             'currency' => $currency,
             'priceDisplay' => ssaMembershipPriceDisplay($pricePence, $currency),
+            'tier' => $cmTier,
+            'variant' => $cmVariant,
+            'billingType' => $cmBillingType,
+            'visibility' => (bool)(int)($activeMembership['is_public'] ?? 0) ? 'public' : 'assigned_only',
             'memberSince' => ssaMembershipDateOnly($memberSince),
             'currentPeriodStart' => ssaMembershipDateOnly($activeMembership['current_period_starts_at']),
             'currentPeriodEnd' => ssaMembershipDateOnly($activeMembership['current_period_ends_at']),
@@ -156,7 +193,7 @@ try {
             'cancelledAt' => ssaMembershipDateOnly($activeMembership['cancelled_at']),
             'cancellationEffectiveAt' => ssaMembershipDateOnly($activeMembership['cancellation_effective_at']),
             'status' => $activeMembership['status'],
-            'renewsMonthly' => true,
+            'renewsMonthly' => $cmBillingType === 'monthly',
             'tableAccessSummary' => $activeMembership['table_access_summary'],
             'coachingSummary' => $activeMembership['coaching_summary'],
             'benefits' => $benefits,
@@ -176,12 +213,34 @@ try {
     //   active membership uses a private plan (e.g. RED_JUNIOR) will still see their plan
     //   details in currentMembership.planKey, .displayName, etc.
     // Rule B (catalogue never exposes private plans): enforced by is_public = 1 below.
+
+    // Detect optional columns
+    $planColStmt = $pdo->query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_membership_plans'"
+    );
+    $planExistingCols   = array_map('strtolower', $planColStmt->fetchAll(PDO::FETCH_COLUMN));
+    $planHasBillingType = in_array('billing_type', $planExistingCols, true);
+    $planHasAvailFrom   = in_array('available_from', $planExistingCols, true);
+    $planHasAvailUntil  = in_array('available_until', $planExistingCols, true);
+    $planHasUpdatedAt   = in_array('updated_at', $planExistingCols, true);
+
+    $planExtraCols = '';
+    if ($planHasBillingType) $planExtraCols .= ', billing_type';
+    if ($planHasAvailFrom)   $planExtraCols .= ', available_from';
+    if ($planHasAvailUntil)  $planExtraCols .= ', available_until';
+
+    $availabilityFilter = '';
+    if ($planHasAvailFrom)  $availabilityFilter .= "\n         AND (available_from IS NULL OR available_from <= CURDATE())";
+    if ($planHasAvailUntil) $availabilityFilter .= "\n         AND (available_until IS NULL OR available_until >= CURDATE())";
+
     $plansStmt = $pdo->query(
         'SELECT id, plan_key, name, display_name, description,
                 monthly_price_pence, currency,
-                table_access_summary, coaching_summary, sort_order
+                table_access_summary, coaching_summary, sort_order,
+                parent_plan_id' . $planExtraCols . '
          FROM ssa_membership_plans
-         WHERE is_active = 1 AND is_public = 1
+         WHERE is_active = 1 AND is_public = 1' . $availabilityFilter . '
          ORDER BY sort_order ASC, id ASC'
     );
     $plans = $plansStmt->fetchAll(PDO::FETCH_ASSOC);
@@ -208,24 +267,45 @@ try {
         }
     }
 
+    // Helper: derive tier from plan_key / parent_plan_id
+    $parentPlanKeyMap = [];
+    foreach ($plans as $p) {
+        $parentPlanKeyMap[(int)$p['id']] = (string)$p['plan_key'];
+    }
+
     $currentPlanKey = $activeMembership['plan_key'] ?? null;
     $availablePlans = array_values(array_map(
-        static function (array $plan) use ($benefitsByPlanId, $currentPlanKey): array {
+        static function (array $plan) use ($benefitsByPlanId, $currentPlanKey, $parentPlanKeyMap, $planHasBillingType, $planHasAvailFrom, $planHasAvailUntil): array {
             $pid = (int)$plan['id'];
             $pence = (int)$plan['monthly_price_pence'];
             $cur = (string)$plan['currency'];
+            $billingType = $planHasBillingType ? (string)$plan['billing_type'] : 'monthly';
+            $isPublic = true; // catalogue only shows public plans
+            $availableFrom  = ($planHasAvailFrom  && isset($plan['available_from']))  ? $plan['available_from']  : null;
+            $availableUntil = ($planHasAvailUntil && isset($plan['available_until'])) ? $plan['available_until'] : null;
+
+            // Resolve parent plan key for tier
+            $parentPlanId  = isset($plan['parent_plan_id']) ? (int)$plan['parent_plan_id'] : null;
+            $parentPlanKey = ($parentPlanId && isset($parentPlanKeyMap[$parentPlanId]))
+                ? $parentPlanKeyMap[$parentPlanId] : null;
+
             return [
-                'planKey' => $plan['plan_key'],
-                'name' => $plan['name'],
-                'displayName' => $plan['display_name'],
-                'description' => $plan['description'],
-                'pricePence' => $pence,
-                'currency' => $cur,
-                'priceDisplay' => ssaMembershipPriceDisplay($pence, $cur),
+                'planKey'            => $plan['plan_key'],
+                'name'               => $plan['name'],
+                'displayName'        => $plan['display_name'],
+                'description'        => $plan['description'],
+                'pricePence'         => $pence,
+                'currency'           => $cur,
+                'priceDisplay'       => ssaMembershipPriceDisplay($pence, $cur),
+                'billingType'        => $billingType,
+                'visibility'         => 'public',
+                'availableFrom'      => $availableFrom ? substr((string)$availableFrom, 0, 10) : null,
+                'availableUntil'     => $availableUntil ? substr((string)$availableUntil, 0, 10) : null,
+                'isSeasonal'         => ($availableFrom !== null || $availableUntil !== null),
                 'tableAccessSummary' => $plan['table_access_summary'],
-                'coachingSummary' => $plan['coaching_summary'],
-                'isCurrent' => $plan['plan_key'] === $currentPlanKey,
-                'benefits' => $benefitsByPlanId[$pid] ?? [],
+                'coachingSummary'    => $plan['coaching_summary'],
+                'isCurrent'          => $plan['plan_key'] === $currentPlanKey,
+                'benefits'           => $benefitsByPlanId[$pid] ?? [],
             ];
         },
         $plans
@@ -242,9 +322,22 @@ try {
     );
     $addons = $addonsStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Most recent row per addon for this user.
+    // Check which optional columns exist on ssa_user_membership_addons
+    $addonColStmt = $pdo->query(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ssa_user_membership_addons'"
+    );
+    $addonExistingCols       = array_map('strtolower', $addonColStmt->fetchAll(PDO::FETCH_COLUMN));
+    $addonHasCancelEffective = in_array('cancellation_effective_at', $addonExistingCols, true);
+    $addonHasCancelReqId     = in_array('cancellation_request_id', $addonExistingCols, true);
+
+    $addonSelectExtra = '';
+    if ($addonHasCancelEffective) $addonSelectExtra .= ', cancellation_effective_at';
+    if ($addonHasCancelReqId)     $addonSelectExtra .= ', cancellation_request_id';
+
+    // Most recent row per addon for this user (keyed by addon_id, also track userAddon id)
     $userAddonStmt = $pdo->prepare(
-        'SELECT addon_id, status, requested_at, activated_at, cancelled_at
+        'SELECT id AS user_addon_id, addon_id, status, requested_at, activated_at, cancelled_at' . $addonSelectExtra . '
          FROM ssa_user_membership_addons
          WHERE uid = :uid
          ORDER BY requested_at DESC'
@@ -258,22 +351,68 @@ try {
         }
     }
 
+    // Look up pending/approved addon_cancellation requests for this user
+    $cancelReqByUserAddonId = [];
+    try {
+        $cancelReqStmt = $pdo->prepare(
+            "SELECT id AS request_id, target_id AS user_addon_id, status, payload_json
+             FROM ssa_admin_requests
+             WHERE uid = :uid
+               AND request_type = 'addon_cancellation'
+               AND status IN ('pending', 'approved')
+             ORDER BY requested_at DESC"
+        );
+        $cancelReqStmt->execute(['uid' => $uid]);
+        foreach ($cancelReqStmt->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+            $uaid = (int)$cr['user_addon_id'];
+            if (!isset($cancelReqByUserAddonId[$uaid])) {
+                $crPayload = [];
+                if (isset($cr['payload_json']) && $cr['payload_json']) {
+                    $decoded = json_decode((string)$cr['payload_json'], true);
+                    if (is_array($decoded)) $crPayload = $decoded;
+                }
+                $cancelReqByUserAddonId[$uaid] = [
+                    'requestId'              => (int)$cr['request_id'],
+                    'status'                 => (string)$cr['status'],
+                    'requestedEffectiveDate' => $crPayload['requestedEffectiveDate'] ?? null,
+                    'lastDayOfCurrentMonth'  => $crPayload['lastDayOfCurrentMonth'] ?? null,
+                ];
+            }
+        }
+    } catch (Throwable $cancelReqEx) {
+        // Non-fatal: table may not exist yet
+        error_log('membership.php: addon cancellation request lookup failed: ' . $cancelReqEx->getMessage());
+    }
+
     $addonList = array_values(array_map(
-        static function (array $addon) use ($userAddonByAddonId): array {
+        static function (array $addon) use ($userAddonByAddonId, $cancelReqByUserAddonId, $addonHasCancelEffective): array {
             $aid = (int)$addon['id'];
             $userRow = $userAddonByAddonId[$aid] ?? null;
             $pence = (int)$addon['monthly_price_pence'];
             $cur = (string)$addon['currency'];
+            $userAddonId = $userRow ? (int)$userRow['user_addon_id'] : null;
+            $cancelRequest = ($userAddonId && isset($cancelReqByUserAddonId[$userAddonId]))
+                ? $cancelReqByUserAddonId[$userAddonId]
+                : null;
+            $cancelEffective = null;
+            if ($userRow && $addonHasCancelEffective && isset($userRow['cancellation_effective_at'])) {
+                $cancelEffective = $userRow['cancellation_effective_at']
+                    ? substr((string)$userRow['cancellation_effective_at'], 0, 10)
+                    : null;
+            }
             return [
-                'addonKey' => $addon['addon_key'],
-                'name' => $addon['name'],
-                'description' => $addon['description'],
-                'pricePence' => $pence,
-                'currency' => $cur,
-                'priceDisplay' => $pence > 0 ? ssaMembershipPriceDisplay($pence, $cur) : 'Included',
-                'userStatus' => $userRow ? (string)$userRow['status'] : 'not_requested',
-                'requestedAt' => $userRow ? $userRow['requested_at'] : null,
-                'activatedAt' => $userRow ? $userRow['activated_at'] : null,
+                'addonKey'              => $addon['addon_key'],
+                'name'                  => $addon['name'],
+                'description'           => $addon['description'],
+                'pricePence'            => $pence,
+                'currency'              => $cur,
+                'priceDisplay'          => $pence > 0 ? ssaMembershipPriceDisplay($pence, $cur) : 'Included',
+                'userStatus'            => $userRow ? (string)$userRow['status'] : 'not_requested',
+                'userAddonId'           => $userAddonId,
+                'requestedAt'           => $userRow ? $userRow['requested_at'] : null,
+                'activatedAt'           => $userRow ? $userRow['activated_at'] : null,
+                'cancellationEffectiveAt' => $cancelEffective,
+                'cancellationRequest'   => $cancelRequest,
             ];
         },
         $addons

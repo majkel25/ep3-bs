@@ -123,6 +123,10 @@ function ssaActionBuildChangeSummary(string $requestType, array $payload): strin
             $planName = $payload['currentPlanName'] ?? $payload['currentPlanKey'] ?? 'Unknown';
             return 'Cancel membership (' . $planName . ')';
 
+        case 'addon_cancellation':
+            $addonName = $payload['addonName'] ?? $payload['addonKey'] ?? 'Unknown';
+            return 'Cancel add-on ' . $addonName;
+
         default:
             return 'Unknown change';
     }
@@ -413,6 +417,45 @@ try {
                         'active'    => 'active',
                     ]);
                     break;
+
+                case 'addon_cancellation':
+                    $userAddonId  = isset($payload['userAddonId']) ? (int)$payload['userAddonId'] : null;
+                    $effectiveDate = $payload['requestedEffectiveDate'] ?? null;
+                    if ($userAddonId && $effectiveDate) {
+                        // Verify addon still active and belongs to member
+                        $addonCheck = $pdo->prepare('SELECT id, uid, status FROM ssa_user_membership_addons WHERE id = :id FOR UPDATE');
+                        $addonCheck->execute(['id' => $userAddonId]);
+                        $addonRow = $addonCheck->fetch();
+                        if (!$addonRow || (int)$addonRow['uid'] !== $memberUid || $addonRow['status'] !== 'approved') {
+                            $pdo->rollBack();
+                            ssaApiJsonResponse(409, ['error' => 'addon_not_active', 'message' => 'The add-on is no longer active or does not belong to this member.']);
+                        }
+                        // Set scheduled cancellation date on the addon assignment
+                        // Check if columns exist before updating
+                        $addonColCheckStmt = $pdo->query(
+                            "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                             WHERE TABLE_SCHEMA = DATABASE()
+                               AND TABLE_NAME = 'ssa_user_membership_addons'
+                               AND COLUMN_NAME IN ('cancellation_effective_at', 'cancellation_request_id')"
+                        );
+                        $addonCols = array_map('strtolower', $addonColCheckStmt->fetchAll(PDO::FETCH_COLUMN));
+                        if (in_array('cancellation_effective_at', $addonCols, true) || in_array('cancellation_request_id', $addonCols, true)) {
+                            $setClauses = [];
+                            $setParams  = ['id' => $userAddonId];
+                            if (in_array('cancellation_effective_at', $addonCols, true)) {
+                                $setClauses[] = 'cancellation_effective_at = :effectiveDate';
+                                $setParams['effectiveDate'] = $effectiveDate;
+                            }
+                            if (in_array('cancellation_request_id', $addonCols, true)) {
+                                $setClauses[] = 'cancellation_request_id = :requestId';
+                                $setParams['requestId'] = $requestId;
+                            }
+                            $pdo->prepare(
+                                'UPDATE ssa_user_membership_addons SET ' . implode(', ', $setClauses) . ' WHERE id = :id'
+                            )->execute($setParams);
+                        }
+                    }
+                    break;
             }
         }
 
@@ -481,23 +524,80 @@ try {
     try {
         ssaUserNotificationsEnsureTable($pdo);
 
-        if ($action === 'approve') {
+        if ($requestType === 'addon_cancellation' && $action === 'approve') {
+            $addonName    = $payload['addonName'] ?? 'Add-on';
+            $effectiveDate = $payload['requestedEffectiveDate'] ?? '';
+            $lastDay      = $payload['lastDayOfCurrentMonth'] ?? '';
+            ssaUserNotificationsCreate(
+                $pdo,
+                $memberUid,
+                'addon_cancellation_approved',
+                'Add-on Cancellation Approved',
+                'Your ' . $addonName . ' cancellation request has been approved. The add-on will remain active until ' . $lastDay . ' and will be cancelled from ' . $effectiveDate . '.',
+                'membership',
+                (string)$requestId,
+                ['requestId' => $requestId, 'addonName' => $addonName]
+            );
+        } elseif ($requestType === 'addon_cancellation' && $action === 'decline') {
+            $addonName = $payload['addonName'] ?? 'Add-on';
+            ssaUserNotificationsCreate(
+                $pdo,
+                $memberUid,
+                'addon_cancellation_rejected',
+                'Add-on Cancellation Request Declined',
+                'Your ' . $addonName . ' cancellation request was not approved. The add-on remains active.' . ($adminComment ? ' Reason: ' . $adminComment : ''),
+                'membership',
+                (string)$requestId,
+                ['requestId' => $requestId, 'addonName' => $addonName]
+            );
+            // Clear scheduled cancellation if it was set (non-fatal)
+            $declineUserAddonId = isset($payload['userAddonId']) ? (int)$payload['userAddonId'] : null;
+            if ($declineUserAddonId) {
+                try {
+                    $clearColStmt = $pdo->query(
+                        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+                         WHERE TABLE_SCHEMA = DATABASE()
+                           AND TABLE_NAME = 'ssa_user_membership_addons'
+                           AND COLUMN_NAME IN ('cancellation_effective_at', 'cancellation_request_id')"
+                    );
+                    $clearCols = array_map('strtolower', $clearColStmt->fetchAll(PDO::FETCH_COLUMN));
+                    if (!empty($clearCols)) {
+                        $clearSet    = [];
+                        if (in_array('cancellation_effective_at', $clearCols, true)) $clearSet[] = 'cancellation_effective_at = NULL';
+                        if (in_array('cancellation_request_id',   $clearCols, true)) $clearSet[] = 'cancellation_request_id = NULL';
+                        $pdo->prepare(
+                            'UPDATE ssa_user_membership_addons SET ' . implode(', ', $clearSet) . ' WHERE id = :id'
+                        )->execute(['id' => $declineUserAddonId]);
+                    }
+                } catch (Throwable $clearEx) {
+                    error_log('SSA admin/member-request-action.php: clear addon cancel cols failed: ' . $clearEx->getMessage());
+                }
+            }
+        } elseif ($action === 'approve') {
             $notifTitle   = 'Membership request approved';
             $notifMessage = 'Your request to ' . lcfirst($changeSummary) . ' has been approved. The new rate starts pro-rata from today.';
+            ssaUserNotificationsCreate(
+                $pdo,
+                $memberUid,
+                'membership_request_' . $newStatus,
+                $notifTitle,
+                $notifMessage,
+                'membership',
+                (string)$requestId
+            );
         } else {
             $notifTitle   = 'Membership request declined';
             $notifMessage = 'Your request to ' . lcfirst($changeSummary) . ' was declined. Reason: ' . $adminComment;
+            ssaUserNotificationsCreate(
+                $pdo,
+                $memberUid,
+                'membership_request_' . $newStatus,
+                $notifTitle,
+                $notifMessage,
+                'membership',
+                (string)$requestId
+            );
         }
-
-        ssaUserNotificationsCreate(
-            $pdo,
-            $memberUid,
-            'membership_request_' . $newStatus,
-            $notifTitle,
-            $notifMessage,
-            'membership',
-            (string)$requestId
-        );
     } catch (Throwable $notifEx) {
         error_log(sprintf(
             'SSA admin/member-request-action.php: member notification failed [%s] %s',

@@ -46,10 +46,19 @@ $this->setup(array(
         <a href="<?= $this->url('backend/event/stats') ?>" class="unlined gray"><span class="symbolic symbolic-stats"><?= $this->t('Statistic') ?></span></a>
     </div>
 
-    <div>
+    <div style="margin-bottom: 8px;">
         <a href="<?= $this->url('backend/config') ?>" class="default-button" style="width: 150px; text-align: left;"><span class="symbolic symbolic-config"><?= $this->t('Configuration') ?></span></a>
         <span class="no-ajax gray" style="margin-left: 16px;">
             <?= $this->t('Configure your system just as you need it') ?>
+        </span>
+    </div>
+
+    <div>
+        <a href="<?= $this->url('backend/content-legal') ?>" class="default-button" style="width: 150px; text-align: left;">
+            <span class="symbolic symbolic-config"><?= $this->t('Content & Legal') ?></span>
+        </a>
+        <span class="no-ajax gray" style="margin-left: 16px;">
+            Membership packages, policies and legal content
         </span>
     </div>
 </div>
