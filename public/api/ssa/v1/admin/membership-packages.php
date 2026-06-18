@@ -109,8 +109,9 @@ function ssaPackageForApi(array $row): array
         'isActive'       => $isActive,
         'availableFrom'  => $availableFrom,
         'availableUntil' => $availableUntil,
-        'isSeasonal'     => ($availableFrom !== null || $availableUntil !== null),
-        'updatedAt'      => $updatedAt,
+        'isSeasonal'      => ($availableFrom !== null || $availableUntil !== null),
+        'updatedAt'       => $updatedAt,
+        'membershipCount' => isset($row['active_member_count']) ? (int)$row['active_member_count'] : null,
     ];
 }
 
@@ -168,6 +169,10 @@ try {
     if ($hasBillingType)    $selectCols .= ', p.billing_type';
     if ($hasAvailableFrom)  $selectCols .= ', p.available_from';
     if ($hasAvailableUntil) $selectCols .= ', p.available_until';
+
+    $selectCols .= ',
+                   (SELECT COUNT(*) FROM ssa_user_memberships m
+                    WHERE m.plan_id = p.id AND m.status = \'active\') AS active_member_count';
 
     $sql = "SELECT $selectCols
             FROM ssa_membership_plans p
