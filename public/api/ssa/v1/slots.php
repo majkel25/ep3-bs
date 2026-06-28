@@ -128,7 +128,9 @@ function ssaApiFetchBlockingEventsForSlots(PDO $pdo, string $rangeStart, string 
 
     if (empty($tableIds)) {
         // No tables requested — only all-table events are relevant.
-        $tableSql = 'e.sid IS NULL';
+        // sid IS NULL  → all-table (standard)
+        // sid = 0      → all-table (legacy fallback)
+        $tableSql = '(e.sid IS NULL OR e.sid = 0)';
     } else {
         $placeholders = [];
 
@@ -138,7 +140,10 @@ function ssaApiFetchBlockingEventsForSlots(PDO $pdo, string $rangeStart, string 
             $params[$key] = $tableId;
         }
 
-        $tableSql = '(e.sid IS NULL OR e.sid IN (' . implode(',', $placeholders) . '))';
+        // sid IS NULL  → all-table (standard)
+        // sid = 0      → all-table (legacy fallback)
+        // sid IN (...)  → table-specific
+        $tableSql = '(e.sid IS NULL OR e.sid = 0 OR e.sid IN (' . implode(',', $placeholders) . '))';
     }
 
     $sql = 'SELECT
@@ -184,7 +189,10 @@ function ssaApiIndexBlockingEvents(array $events): array
             'event_name'     => $eventName,
         ];
 
-        if ($event['sid'] === null) {
+        // sid IS NULL or sid = 0 → all-table event (NULL is standard; 0 is legacy fallback)
+        $isAllTable = $event['sid'] === null || (int)$event['sid'] === 0;
+
+        if ($isAllTable) {
             $index['allTable'][] = $entry;
         } else {
             $tableId = (int)$event['sid'];
@@ -299,6 +307,30 @@ try {
     $eventRangeEnd   = (new DateTimeImmutable($to . ' 00:00:00', $tz))->modify('+1 day')->format('Y-m-d H:i:s');
     $rawEvents = ssaApiFetchBlockingEventsForSlots($pdo, $eventRangeStart, $eventRangeEnd, $tableIds);
     $eventIndex = ssaApiIndexBlockingEvents($rawEvents);
+
+    // Development diagnostic: logs event and reservation counts for the exact
+    // 29 June 2026 single-day request. Remove or disable after confirming the fix.
+    if ($from === '2026-06-29' && $to === '2026-06-29') {
+        $diagEventSummary = array_map(function (array $e): string {
+            return sprintf(
+                'eid=%d sid=%s status=enabled start=%s end=%s',
+                $e['eid'],
+                $e['sid'] === null ? 'NULL' : (string)$e['sid'],
+                $e['datetime_start'],
+                $e['datetime_end']
+            );
+        }, $rawEvents);
+        error_log(sprintf(
+            'SSA DIAG slots.php from=%s to=%s | reservations=%d | events=%d | allTable=%d | byTable_keys=%s | events=[%s]',
+            $from,
+            $to,
+            count($reservations),
+            count($rawEvents),
+            count($eventIndex['allTable']),
+            implode(',', array_keys($eventIndex['byTable'])),
+            implode('; ', $diagEventSummary)
+        ));
+    }
 
     $dates = ssaApiDateList($from, $to);
     $tables = [];

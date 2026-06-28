@@ -30,7 +30,10 @@ class SsaSlotAvailabilityTest extends TestCase
                 'event_name'     => $eventName,
             ];
 
-            if ($event['sid'] === null) {
+            // sid IS NULL or sid = 0 → all-table event
+            $isAllTable = $event['sid'] === null || (int)$event['sid'] === 0;
+
+            if ($isAllTable) {
                 $index['allTable'][] = $entry;
             } else {
                 $tableId = (int)$event['sid'];
@@ -154,6 +157,16 @@ class SsaSlotAvailabilityTest extends TestCase
         ]);
 
         $this->assertCount(1, $index['allTable']);
+        $this->assertEmpty($index['byTable']);
+    }
+
+    public function testSidZeroEventTreatedAsAllTable(): void
+    {
+        $index = $this->indexBlockingEvents([
+            array_merge($this->event(1, null, '2026-07-01 09:00:00', '2026-07-01 12:00:00'), ['sid' => 0]),
+        ]);
+
+        $this->assertCount(1, $index['allTable'], 'sid=0 must be treated as an all-table event');
         $this->assertEmpty($index['byTable']);
     }
 
