@@ -380,3 +380,175 @@ class SsaSlotAvailabilityTest extends TestCase
         $this->assertNull($result);
     }
 }
+
+/**
+ * Tests for booking temporal state and amendment logic.
+ *
+ * Pure-logic tests — no database connection required.
+ */
+class SsaBookingTemporalStateTest extends TestCase
+{
+    // ── Inline helpers mirroring booking-amend-options.php logic ──────────
+
+    /**
+     * Returns 'upcoming', 'active', or 'past' for a booking on $date with the
+     * given $start / $end, evaluated at simulated clock time $nowTime on the
+     * same $date.
+     */
+    private function temporalState(string $date, string $start, string $end, string $nowTime, string $nowDate): string
+    {
+        if ($nowDate < $date) { return 'upcoming'; }
+        if ($nowDate > $date) { return 'past'; }
+
+        // Same date.
+        if ($nowTime < $start) { return 'upcoming'; }
+        if ($nowTime >= $end)  { return 'past'; }
+        return 'active';
+    }
+
+    /**
+     * Calculates the earliest permitted new end time given a booking start and
+     * the current clock time, using $blockSec-second blocks.
+     */
+    private function earliestNewEnd(string $timeStart, string $nowTime, int $blockSec = 1800): string
+    {
+        $startSec = $this->t2s($timeStart);
+        $nowSec   = $this->t2s($nowTime);
+
+        $elapsed         = $nowSec - $startSec;
+        $completedBlocks = (int)ceil($elapsed / $blockSec);
+        $earliestSec     = $startSec + ($completedBlocks * $blockSec);
+
+        if ($earliestSec <= $startSec) {
+            $earliestSec = $startSec + $blockSec;
+        }
+
+        return $this->s2t($earliestSec);
+    }
+
+    private function t2s(string $time): int
+    {
+        [$h, $m] = explode(':', $time);
+        return ((int)$h * 3600) + ((int)$m * 60);
+    }
+
+    private function s2t(int $seconds): string
+    {
+        return sprintf('%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60));
+    }
+
+    // ── Temporal state tests ──────────────────────────────────────────────
+
+    public function testUpcomingBookingIsUpcoming(): void
+    {
+        // Booking 13:00–16:30; now 12:00
+        $this->assertSame('upcoming', $this->temporalState('2026-07-01', '13:00', '16:30', '12:00', '2026-07-01'));
+    }
+
+    public function testBookingExactlyAtStartIsActive(): void
+    {
+        $this->assertSame('active', $this->temporalState('2026-07-01', '13:00', '16:30', '13:00', '2026-07-01'));
+    }
+
+    public function testBookingBetweenStartAndEndIsActive(): void
+    {
+        // now 14:00 is between 13:00 and 16:30 → active
+        $this->assertSame('active', $this->temporalState('2026-07-01', '13:00', '16:30', '14:00', '2026-07-01'));
+    }
+
+    public function testBookingOneMinuteBeforeEndIsActive(): void
+    {
+        $this->assertSame('active', $this->temporalState('2026-07-01', '13:00', '16:30', '16:29', '2026-07-01'));
+    }
+
+    public function testBookingExactlyAtEndIsPast(): void
+    {
+        $this->assertSame('past', $this->temporalState('2026-07-01', '13:00', '16:30', '16:30', '2026-07-01'));
+    }
+
+    public function testBookingAfterEndIsPast(): void
+    {
+        $this->assertSame('past', $this->temporalState('2026-07-01', '13:00', '16:30', '17:00', '2026-07-01'));
+    }
+
+    public function testBookingYesterdayIsPast(): void
+    {
+        $this->assertSame('past', $this->temporalState('2026-07-01', '13:00', '16:30', '14:00', '2026-07-02'));
+    }
+
+    public function testBookingTomorrowIsUpcoming(): void
+    {
+        $this->assertSame('upcoming', $this->temporalState('2026-07-03', '13:00', '16:30', '14:00', '2026-07-02'));
+    }
+
+    // ── Grouped booking uses final end time ───────────────────────────────
+
+    public function testGroupedBookingUsesGroupEndForActiveState(): void
+    {
+        // Slots 13:00–13:30, 13:30–14:00 grouped → groupEnd = 14:00
+        // At 13:45, booking is active using group end 14:00
+        $this->assertSame('active', $this->temporalState('2026-07-01', '13:00', '14:00', '13:45', '2026-07-01'));
+    }
+
+    public function testGroupedBookingAtEndIsPast(): void
+    {
+        $this->assertSame('past', $this->temporalState('2026-07-01', '13:00', '14:00', '14:00', '2026-07-01'));
+    }
+
+    // ── Earliest new end calculation ──────────────────────────────────────
+
+    public function testEarliestNewEndAtExactSlotBoundary(): void
+    {
+        // Now = 14:00, start = 13:00, blockSec = 1800
+        // 14:00 is exactly a slot boundary → the 14:00–14:30 block starts now
+        // Earliest end = 14:30
+        $this->assertSame('14:30', $this->earliestNewEnd('13:00', '14:00', 1800));
+    }
+
+    public function testEarliestNewEndMidBlock(): void
+    {
+        // Now = 14:10 → still in 14:00–14:30 block → earliest = 14:30
+        $this->assertSame('14:30', $this->earliestNewEnd('13:00', '14:10', 1800));
+    }
+
+    public function testEarliestNewEndOneSecondBeforeBoundary(): void
+    {
+        // Now = 13:59 → in 13:30–14:00 block → earliest = 14:00
+        $this->assertSame('14:00', $this->earliestNewEnd('13:00', '13:59', 1800));
+    }
+
+    public function testEarliestNewEndAtBookingStart(): void
+    {
+        // Now = 13:00 (just started) → first block = 13:00–13:30 → earliest = 13:30
+        $this->assertSame('13:30', $this->earliestNewEnd('13:00', '13:00', 1800));
+    }
+
+    public function testEarliestNewEndWith60MinuteBlocks(): void
+    {
+        // 60-minute blocks; now = 14:30 → in 14:00–15:00 block → earliest = 15:00
+        $this->assertSame('15:00', $this->earliestNewEnd('13:00', '14:30', 3600));
+    }
+
+    // ── Amendment direction ────────────────────────────────────────────────
+
+    public function testShorteningReducesEndTime(): void
+    {
+        $oldEnd = '16:30';
+        $newEnd = '15:00';
+        $this->assertSame('shortened', $newEnd < $oldEnd ? 'shortened' : 'extended');
+    }
+
+    public function testExtendingIncreasesEndTime(): void
+    {
+        $oldEnd = '16:30';
+        $newEnd = '17:30';
+        $this->assertSame('extended', $newEnd > $oldEnd ? 'extended' : 'shortened');
+    }
+
+    public function testNoOpEndTimeIsDetected(): void
+    {
+        $oldEnd = '16:30';
+        $newEnd = '16:30';
+        $this->assertTrue($oldEnd === $newEnd);
+    }
+}

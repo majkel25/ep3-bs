@@ -42,6 +42,7 @@ const ALLOWED_PREF_KEYS = [
     'match_recordings_posted',
     'coaching_bookings',
     'membership_updates',
+    'booking_amended_active_week',
 ];
 
 const META_KEY = 'ssa.notification.preferences';
@@ -69,10 +70,17 @@ try {
             $stored = [];
         }
 
-        // Build full map defaulting missing keys to true.
+        // New keys that should default to false (opt-in) rather than true (opt-out).
+        $defaultOffKeys = ['booking_amended_active_week'];
+
+        // Build full map; unset keys use true for legacy keys, false for new opt-in keys.
         $prefs = [];
         foreach (ALLOWED_PREF_KEYS as $key) {
-            $prefs[$key] = isset($stored[$key]) ? (bool)$stored[$key] : true;
+            if (isset($stored[$key])) {
+                $prefs[$key] = (bool)$stored[$key];
+            } else {
+                $prefs[$key] = !in_array($key, $defaultOffKeys, true);
+            }
         }
 
         ssaApiJsonResponse(200, ['status' => 'ok', 'preferences' => $prefs]);
