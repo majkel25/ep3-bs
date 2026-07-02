@@ -308,30 +308,6 @@ try {
     $rawEvents = ssaApiFetchBlockingEventsForSlots($pdo, $eventRangeStart, $eventRangeEnd, $tableIds);
     $eventIndex = ssaApiIndexBlockingEvents($rawEvents);
 
-    // Development diagnostic: logs event and reservation counts for the exact
-    // 29 June 2026 single-day request. Remove or disable after confirming the fix.
-    if ($from === '2026-06-29' && $to === '2026-06-29') {
-        $diagEventSummary = array_map(function (array $e): string {
-            return sprintf(
-                'eid=%d sid=%s status=enabled start=%s end=%s',
-                $e['eid'],
-                $e['sid'] === null ? 'NULL' : (string)$e['sid'],
-                $e['datetime_start'],
-                $e['datetime_end']
-            );
-        }, $rawEvents);
-        error_log(sprintf(
-            'SSA DIAG slots.php from=%s to=%s | reservations=%d | events=%d | allTable=%d | byTable_keys=%s | events=[%s]',
-            $from,
-            $to,
-            count($reservations),
-            count($rawEvents),
-            count($eventIndex['allTable']),
-            implode(',', array_keys($eventIndex['byTable'])),
-            implode('; ', $diagEventSummary)
-        ));
-    }
-
     $dates = ssaApiDateList($from, $to);
     $tables = [];
 
