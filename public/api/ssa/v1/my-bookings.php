@@ -144,19 +144,20 @@ try {
         FROM bs_reservations r
         INNER JOIN bs_bookings b ON b.bid = r.bid
         LEFT JOIN bs_squares s ON s.sid = b.sid
-        LEFT JOIN ssa_booking_private_notes n ON n.booking_id = b.bid AND n.uid = :uid
+        LEFT JOIN ssa_booking_private_notes n ON n.booking_id = b.bid AND n.uid = :noteUid
         WHERE r.date >= :from
           AND r.date <= :to
-          AND b.uid = :uid
+          AND b.uid = :bookingUid
           AND b.status <> :cancelledStatus
         ORDER BY r.date ASC, r.time_start ASC, b.sid ASC, r.rid ASC';
 
     $statement = $pdo->prepare($sql);
 
     $statement->execute([
-        'from' => $from,
-        'to' => $to,
-        'uid' => $uid,
+        'from'            => $from,
+        'to'              => $to,
+        'noteUid'         => $uid,
+        'bookingUid'      => $uid,
         'cancelledStatus' => 'cancelled',
     ]);
 
