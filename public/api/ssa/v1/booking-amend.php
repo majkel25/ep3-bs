@@ -205,6 +205,32 @@ try {
         (string)$user['uid'],
     ]));
 
+    // ── Ensure audit table exists (DDL must run outside any transaction) ───
+    // MySQL DDL triggers an implicit commit, which would corrupt the
+    // surrounding transaction.  Create the table here, before beginTransaction.
+
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS ssa_booking_amendments (
+            id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            booking_id      INT NOT NULL,
+            uid             INT NOT NULL,
+            table_id        INT NOT NULL,
+            booking_date    DATE NOT NULL,
+            old_time_start  VARCHAR(8) NOT NULL,
+            old_time_end    VARCHAR(8) NOT NULL,
+            new_time_end    VARCHAR(8) NOT NULL,
+            change_type     VARCHAR(16) NOT NULL,
+            source          VARCHAR(64) NOT NULL DEFAULT 'ios_app',
+            auth0_sub       VARCHAR(255) NULL,
+            idempotency_key VARCHAR(128) NULL,
+            amended_at      DATETIME NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_idempotency (idempotency_key),
+            KEY idx_booking_id (booking_id),
+            KEY idx_uid (uid)
+         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    );
+
     // ── Transaction ────────────────────────────────────────────────────────
     // Lock the reservation row first (FOR UPDATE), then re-verify all
     // preconditions so concurrent amendments or cancellations are rejected.
@@ -327,29 +353,6 @@ try {
         }
 
         // Audit record.
-        $auditStmt = $pdo->prepare(
-            "CREATE TABLE IF NOT EXISTS ssa_booking_amendments (
-                id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-                booking_id      INT NOT NULL,
-                uid             INT NOT NULL,
-                table_id        INT NOT NULL,
-                booking_date    DATE NOT NULL,
-                old_time_start  VARCHAR(8) NOT NULL,
-                old_time_end    VARCHAR(8) NOT NULL,
-                new_time_end    VARCHAR(8) NOT NULL,
-                change_type     VARCHAR(16) NOT NULL,
-                source          VARCHAR(64) NOT NULL DEFAULT 'ios_app',
-                auth0_sub       VARCHAR(255) NULL,
-                idempotency_key VARCHAR(128) NULL,
-                amended_at      DATETIME NOT NULL,
-                PRIMARY KEY (id),
-                UNIQUE KEY uq_idempotency (idempotency_key),
-                KEY idx_booking_id (booking_id),
-                KEY idx_uid (uid)
-             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-        );
-        $auditStmt->execute();
-
         $insertAudit = $pdo->prepare(
             'INSERT IGNORE INTO ssa_booking_amendments
                 (booking_id, uid, table_id, booking_date, old_time_start, old_time_end, new_time_end,
@@ -375,22 +378,15 @@ try {
 
         $amendmentId = (int)$pdo->lastInsertId();
 
-        // If idempotency_key was already present, lastInsertId() returns 0.
-        // This means the amendment was already processed — return success idempotently.
+        // If idempotency_key was already present, INSERT IGNORE had no effect and
+        // lastInsertId() returns 0 — look up the existing audit row's ID.
         if ($amendmentId === 0) {
-            $pdo->rollBack();
-            ssaApiJsonResponse(200, [
-                'status'     => 'ok',
-                'bookingId'  => $bookingId,
-                'tableId'    => $tableId,
-                'date'       => $date,
-                'timeStart'  => $timeStart,
-                'oldTimeEnd' => $oldEnd,
-                'newTimeEnd' => $newEnd,
-                'changeType' => $changeType,
-                'amendmentId' => null,
-                'message'    => 'Already applied.',
-            ]);
+            $idStmt = $pdo->prepare(
+                'SELECT id FROM ssa_booking_amendments WHERE idempotency_key = :key LIMIT 1'
+            );
+            $idStmt->execute(['key' => $idempotencyKey]);
+            $idRow = $idStmt->fetch();
+            $amendmentId = $idRow ? (int)$idRow['id'] : 0;
         }
 
         $pdo->commit();
@@ -419,6 +415,8 @@ try {
         'timeStart'   => $timeStart,
         'oldTimeEnd'  => $oldEnd,
         'newTimeEnd'  => $newEnd,
+        'startLocal'  => ssaApiDateTimeLocalIso($date, $timeStart),
+        'newEndLocal' => ssaApiDateTimeLocalIso($date, $newEnd),
         'changeType'  => $changeType,
         'amendmentId' => $amendmentId,
     ]);
