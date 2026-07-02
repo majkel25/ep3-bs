@@ -2,7 +2,7 @@
 require_once __DIR__ . '/_auth0.php';
 require_once __DIR__ . '/_db.php';
 
-ssaApiRequireAuth0Claims();
+$slotsClaims = ssaApiRequireAuth0Claims();
 
 // ---------------------------------------------------------------------------
 // Reservations (bs_reservations + bs_bookings)
@@ -296,9 +296,64 @@ try {
         }
     }
 
+    // Resolve the authenticated member's UID so we can attach their private notes
+    // to their own occupied slots. Non-fatal: if the user is not linked or the
+    // lookup fails we simply proceed without note data.
+    $slotsAuthenticatedUid = null;
+    $slotsAuthSub = isset($slotsClaims['sub']) ? trim((string)$slotsClaims['sub']) : '';
+    if ($slotsAuthSub !== '') {
+        try {
+            $slotsLinkStmt = $pdo->prepare(
+                'SELECT uid FROM ssa_auth0_user_links
+                 WHERE auth0_sub = :sub AND revoked_at IS NULL
+                 LIMIT 1'
+            );
+            $slotsLinkStmt->execute(['sub' => $slotsAuthSub]);
+            $slotsLink = $slotsLinkStmt->fetch();
+            if ($slotsLink) {
+                $slotsAuthenticatedUid = (int)$slotsLink['uid'];
+            }
+        } catch (Throwable $e) {
+            // Non-fatal: proceed without private notes.
+        }
+    }
+
     // Load reservations (bs_reservations + bs_bookings, excluding cancelled).
     $reservations = ssaApiFetchReservationsForSlots($pdo, $from, $to, $tableIds);
     $reservationIndex = ssaApiIndexReservations($reservations);
+
+    // Build a map of booking_id → private_note for the authenticated user.
+    // Wrapped in try/catch so a missing table on first deploy is non-fatal.
+    $slotsPrivateNoteIndex = [];
+    if ($slotsAuthenticatedUid !== null && count($reservations) > 0) {
+        try {
+            $slotsBidList = array_values(array_unique(array_filter(
+                array_map(fn($r) => isset($r['bid']) ? (int)$r['bid'] : null, $reservations),
+                fn($bid) => $bid !== null && $bid > 0
+            )));
+            if (count($slotsBidList) > 0) {
+                $slotsNotePlaceholders = [];
+                $slotsNoteParams = ['uid' => $slotsAuthenticatedUid];
+                foreach ($slotsBidList as $i => $bid) {
+                    $pk = 'nbid' . $i;
+                    $slotsNotePlaceholders[] = ':' . $pk;
+                    $slotsNoteParams[$pk] = $bid;
+                }
+                $slotsNoteStmt = $pdo->prepare(
+                    'SELECT booking_id, note
+                     FROM ssa_booking_private_notes
+                     WHERE uid = :uid
+                       AND booking_id IN (' . implode(',', $slotsNotePlaceholders) . ')'
+                );
+                $slotsNoteStmt->execute($slotsNoteParams);
+                foreach ($slotsNoteStmt->fetchAll() as $nr) {
+                    $slotsPrivateNoteIndex[(int)$nr['booking_id']] = (string)$nr['note'];
+                }
+            }
+        } catch (Throwable $e) {
+            // Table may not exist yet on a fresh deployment.
+        }
+    }
 
     // Load blocking events (bs_events + bs_events_meta).
     // Range is [from 00:00, (to+1) 00:00) in Europe/London — covers the full
@@ -378,23 +433,38 @@ try {
                     $slot['billingStatus']  = null;
                     $slot['visibility']     = null;
                     $slot['quantity']       = null;
+                    $slot['privateNote']    = null;
                 } else {
                     $dayReservations = $reservationIndex[$tableId][$date] ?? [];
                     $overlap = ssaApiFindOverlappingReservation($dayReservations, $slotStart, $slotEnd);
 
                     if ($overlap !== null) {
                         $bookingStatus = $overlap['booking_status'] ?? null;
+                        $overlapBid    = isset($overlap['bid']) ? (int)$overlap['bid'] : null;
+                        $overlapUid    = isset($overlap['uid']) ? (int)$overlap['uid'] : null;
+
+                        // Only return the private note to the booking owner.
+                        $privateNote = null;
+                        if ($overlapBid !== null
+                            && $overlapUid !== null
+                            && $slotsAuthenticatedUid !== null
+                            && $overlapUid === $slotsAuthenticatedUid
+                        ) {
+                            $raw = $slotsPrivateNoteIndex[$overlapBid] ?? null;
+                            $privateNote = ($raw !== null && $raw !== '') ? $raw : null;
+                        }
 
                         $slot['status']        = $bookingStatus === 'subscription' ? 'subscription' : 'occupied';
                         $slot['isBookable']    = false;
                         $slot['reservationId'] = isset($overlap['rid']) ? (int)$overlap['rid'] : null;
-                        $slot['bookingId']     = isset($overlap['bid']) ? (int)$overlap['bid'] : null;
-                        $slot['userId']        = isset($overlap['uid']) ? (int)$overlap['uid'] : null;
+                        $slot['bookingId']     = $overlapBid;
+                        $slot['userId']        = $overlapUid;
                         $slot['bookedBy']      = ssaApiPublicBookedBy($overlap);
                         $slot['bookingStatus'] = $bookingStatus;
                         $slot['billingStatus'] = $overlap['status_billing'] ?? null;
                         $slot['visibility']    = $overlap['visibility'] ?? null;
                         $slot['quantity']      = isset($overlap['quantity']) ? (int)$overlap['quantity'] : null;
+                        $slot['privateNote']   = $privateNote;
                     }
                 }
 
