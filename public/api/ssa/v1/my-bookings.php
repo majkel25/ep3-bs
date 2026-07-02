@@ -90,22 +90,6 @@ try {
 
     $pdo = ssaApiCreatePdo();
 
-    // Ensure the private-notes table exists so the LEFT JOIN below never fails
-    // on a fresh deployment before booking-note.php has been called.
-    $pdo->exec(
-        'CREATE TABLE IF NOT EXISTS ssa_booking_private_notes (
-            id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-            booking_id BIGINT UNSIGNED NOT NULL,
-            uid        BIGINT UNSIGNED NOT NULL,
-            note       VARCHAR(100)    NOT NULL DEFAULT \'\',
-            created_at DATETIME        NOT NULL,
-            updated_at DATETIME        NOT NULL,
-            PRIMARY KEY (id),
-            UNIQUE KEY uq_booking_private_note (booking_id, uid),
-            KEY idx_uid (uid)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
-    );
-
     $linkStatement = $pdo->prepare(
         'SELECT
             id,
