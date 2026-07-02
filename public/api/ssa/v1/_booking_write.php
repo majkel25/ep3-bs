@@ -489,6 +489,26 @@ function ssaApiValidateActiveBookingLimit(PDO $pdo, array $square, int $uid): ar
     ];
 }
 
+/**
+ * Returns the earliest permitted amendment end time in seconds from midnight.
+ *
+ * The block that contains the current moment — including one that begins
+ * exactly now — is considered started and may not be shortened away.
+ *
+ * Uses intdiv+1 so that exact slot boundaries are correctly treated as the
+ * start of the next block (ceil() fails at exact boundaries).
+ *
+ * @param int $startSec  Booking start, seconds from midnight
+ * @param int $nowSec    Current time, seconds from midnight (include sub-minute seconds)
+ * @param int $blockSec  Block duration in seconds (e.g. 1800)
+ */
+function ssaApiEarliestAmendEndSec(int $startSec, int $nowSec, int $blockSec): int
+{
+    $elapsedSec    = max(0, $nowSec - $startSec);
+    $startedBlocks = intdiv($elapsedSec, $blockSec) + 1;
+    return $startSec + ($startedBlocks * $blockSec);
+}
+
 function ssaApiBookingPayload(array $bookingRow, array $reservationRow, array $squareRow): array
 {
     $date = (string)$reservationRow['date'];

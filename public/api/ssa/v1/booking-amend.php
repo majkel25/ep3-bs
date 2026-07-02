@@ -136,15 +136,10 @@ try {
 
     // ── Started-slot protection ────────────────────────────────────────────
     // earliestNewEnd = end of the block currently in progress.
+    // Use full seconds (not H:i) so rounding does not shift an exact boundary.
 
-    $nowSec          = ssaApiTimeToSeconds($now->format('H:i'));
-    $elapsedSec      = $nowSec - $startSec;
-    $completedBlocks = (int)ceil($elapsedSec / $blockSec);
-    $earliestEndSec  = $startSec + ($completedBlocks * $blockSec);
-
-    if ($earliestEndSec <= $startSec) {
-        $earliestEndSec = $startSec + $blockSec;
-    }
+    $nowSec         = (int)$now->format('H') * 3600 + (int)$now->format('i') * 60 + (int)$now->format('s');
+    $earliestEndSec = ssaApiEarliestAmendEndSec($startSec, $nowSec, $blockSec);
 
     if ($newEndSec < $earliestEndSec) {
         ssaApiJsonResponse(400, [
@@ -157,7 +152,7 @@ try {
 
     $changeType = $newEndSec < $oldEndSec ? 'shortened' : 'extended';
 
-    // ── Extension conflict checks ──────────────────────────────────────────
+    // ── Pre-transaction conflict checks (fast path) ───────────────────────
 
     if ($changeType === 'extended') {
         // Check blocking events on the extended range (oldEnd → newEnd).
@@ -211,12 +206,78 @@ try {
     ]));
 
     // ── Transaction ────────────────────────────────────────────────────────
+    // Lock the reservation row first (FOR UPDATE), then re-verify all
+    // preconditions so concurrent amendments or cancellations are rejected.
 
     $pdo->beginTransaction();
 
     try {
-        // Re-check for conflicting reservation inside the transaction (race).
+        // Lock and reload the reservation + booking inside the transaction.
+        $lockStmt = $pdo->prepare(
+            'SELECT r.rid, r.time_end, b.status
+             FROM bs_reservations r
+             INNER JOIN bs_bookings b ON b.bid = r.bid
+             WHERE r.rid = :rid
+               AND b.bid = :bid
+             FOR UPDATE'
+        );
+        $lockStmt->execute(['rid' => $rid, 'bid' => $bookingId]);
+        $lockedRow = $lockStmt->fetch();
+
+        if (!$lockedRow) {
+            $pdo->rollBack();
+            ssaApiJsonResponse(409, ['error' => 'booking_not_found', 'message' => 'Booking no longer exists.']);
+        }
+
+        // Verify no concurrent amendment has already changed the end time.
+        $lockedEnd = ssaApiNormaliseTimeValue($lockedRow['time_end']);
+        if ($lockedEnd !== $oldEnd) {
+            $pdo->rollBack();
+            ssaApiJsonResponse(409, [
+                'error'   => 'booking_amendment_conflict',
+                'message' => 'The booking was concurrently amended. Please refresh and try again.',
+            ]);
+        }
+
+        // Verify booking is still not cancelled.
+        if (($lockedRow['status'] ?? '') === 'cancelled') {
+            $pdo->rollBack();
+            ssaApiJsonResponse(409, ['error' => 'booking_cancelled', 'message' => 'This booking has been cancelled.']);
+        }
+
+        // Re-verify booking is still active using current server time.
+        $txNow       = new DateTimeImmutable('now', $tz);
+        $txBookingEnd = ssaApiBuildDateTime($date, $oldEnd);
+
+        if ($txNow >= $txBookingEnd) {
+            $pdo->rollBack();
+            ssaApiJsonResponse(409, ['error' => 'booking_ended', 'message' => 'This booking has ended.']);
+        }
+
+        // Recalculate started-slot protection with current server time.
+        $txNowSec        = (int)$txNow->format('H') * 3600 + (int)$txNow->format('i') * 60 + (int)$txNow->format('s');
+        $txEarliestEndSec = ssaApiEarliestAmendEndSec($startSec, $txNowSec, $blockSec);
+
+        if ($newEndSec < $txEarliestEndSec) {
+            $pdo->rollBack();
+            ssaApiJsonResponse(400, [
+                'error'   => 'cannot_shorten_started_block',
+                'message' => 'The earliest permitted new end time is ' . ssaApiSecondsToTime($txEarliestEndSec) . ' (the current block has already started).',
+            ]);
+        }
+
+        // Re-check blocking events inside the transaction (catches events created
+        // after option loading but before amendment submission).
         if ($changeType === 'extended') {
+            if (ssaApiHasBlockingEvent($pdo, $tableId, ssaApiBuildDateTime($date, $oldEnd), ssaApiBuildDateTime($date, $newEnd))) {
+                $pdo->rollBack();
+                ssaApiJsonResponse(409, [
+                    'error'   => 'booking_amendment_conflict',
+                    'message' => 'The requested end time is no longer available.',
+                ]);
+            }
+
+            // Re-check reservation conflicts (FOR UPDATE to close the race window).
             $raceStmt = $pdo->prepare(
                 'SELECT r.rid
                  FROM bs_reservations r

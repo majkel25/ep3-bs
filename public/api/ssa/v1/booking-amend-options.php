@@ -118,20 +118,13 @@ try {
     // ── Earliest permitted new end ─────────────────────────────────────────
     // End of the booking block that contains the current time.
     // At exactly a slot boundary, that newly-commencing block is started.
+    // Use full seconds (not H:i) so rounding does not shift an exact boundary.
 
-    $nowSec     = ssaApiTimeToSeconds($now->format('H:i'));
-    $startSec   = ssaApiTimeToSeconds($timeStart);
-    $endSec     = ssaApiTimeToSeconds($timeEnd);
+    $nowSec   = (int)$now->format('H') * 3600 + (int)$now->format('i') * 60 + (int)$now->format('s');
+    $startSec = ssaApiTimeToSeconds($timeStart);
+    $endSec   = ssaApiTimeToSeconds($timeEnd);
 
-    // Number of complete blocks elapsed since booking start
-    $elapsedSec      = $nowSec - $startSec;
-    $completedBlocks = (int)ceil($elapsedSec / $blockSec);
-    $earliestEndSec  = $startSec + ($completedBlocks * $blockSec);
-
-    if ($earliestEndSec <= $startSec) {
-        $earliestEndSec = $startSec + $blockSec;
-    }
-
+    $earliestEndSec = ssaApiEarliestAmendEndSec($startSec, $nowSec, $blockSec);
     $earliestNewEnd = ssaApiSecondsToTime($earliestEndSec);
 
     // ── Load blocking events for today ─────────────────────────────────────

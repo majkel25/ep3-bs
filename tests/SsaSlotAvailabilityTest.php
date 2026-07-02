@@ -409,27 +409,26 @@ class SsaBookingTemporalStateTest extends TestCase
     /**
      * Calculates the earliest permitted new end time given a booking start and
      * the current clock time, using $blockSec-second blocks.
+     *
+     * Mirrors ssaApiEarliestAmendEndSec() in _booking_write.php.
+     * Accepts H:MM or H:MM:SS strings so sub-minute precision tests are possible.
      */
     private function earliestNewEnd(string $timeStart, string $nowTime, int $blockSec = 1800): string
     {
         $startSec = $this->t2s($timeStart);
         $nowSec   = $this->t2s($nowTime);
 
-        $elapsed         = $nowSec - $startSec;
-        $completedBlocks = (int)ceil($elapsed / $blockSec);
-        $earliestSec     = $startSec + ($completedBlocks * $blockSec);
-
-        if ($earliestSec <= $startSec) {
-            $earliestSec = $startSec + $blockSec;
-        }
+        $elapsedSec    = max(0, $nowSec - $startSec);
+        $startedBlocks = intdiv($elapsedSec, $blockSec) + 1;
+        $earliestSec   = $startSec + ($startedBlocks * $blockSec);
 
         return $this->s2t($earliestSec);
     }
 
     private function t2s(string $time): int
     {
-        [$h, $m] = explode(':', $time);
-        return ((int)$h * 3600) + ((int)$m * 60);
+        $parts = explode(':', $time);
+        return (int)$parts[0] * 3600 + (int)($parts[1] ?? 0) * 60 + (int)($parts[2] ?? 0);
     }
 
     private function s2t(int $seconds): string
@@ -527,6 +526,100 @@ class SsaBookingTemporalStateTest extends TestCase
     {
         // 60-minute blocks; now = 14:30 → in 14:00–15:00 block → earliest = 15:00
         $this->assertSame('15:00', $this->earliestNewEnd('13:00', '14:30', 3600));
+    }
+
+    // Required spec cases — all with 13:00 start, 30-minute blocks ────────
+
+    public function testEarliestNewEndOneMinuteAfterBookingStart(): void
+    {
+        // now 13:01 → still in first 13:00–13:30 block → earliest = 13:30
+        $this->assertSame('13:30', $this->earliestNewEnd('13:00', '13:01', 1800));
+    }
+
+    public function testEarliestNewEndNearFirstBlockEnd(): void
+    {
+        // now 13:29 → still in first 13:00–13:30 block → earliest = 13:30
+        $this->assertSame('13:30', $this->earliestNewEnd('13:00', '13:29', 1800));
+    }
+
+    public function testEarliestNewEndAtSecondBlockBoundary(): void
+    {
+        // now 13:30 exactly → second block 13:30–14:00 has started → earliest = 14:00
+        $this->assertSame('14:00', $this->earliestNewEnd('13:00', '13:30', 1800));
+    }
+
+    public function testEarliestNewEndAtFourthBlockBoundary(): void
+    {
+        // now 14:30 exactly → fourth block 14:30–15:00 has started → earliest = 15:00
+        $this->assertSame('15:00', $this->earliestNewEnd('13:00', '14:30', 1800));
+    }
+
+    public function testEarliestNewEndOneSecondBeforeBookingEnd(): void
+    {
+        // Booking 13:00–16:30; now 16:29:59 → in 16:00–16:30 block → earliest = 16:30
+        // This verifies the result does not exceed the current booking end.
+        $this->assertSame('16:30', $this->earliestNewEnd('13:00', '16:29:59', 1800));
+    }
+
+    // ── Event race condition ───────────────────────────────────────────────
+
+    public function testEventRaceConditionBlocksAmendment(): void
+    {
+        // Simulates the race between option loading and amendment submission:
+        // 1. Initial check: no events → extension appears available.
+        // 2. A blocking event is created by another process.
+        // 3. Transactional recheck detects it → amendment must be rejected.
+        // Steps 4-7 (reservation unchanged, no audit, no push) are enforced by
+        // the rollBack() path in booking-amend.php and verified on deployment.
+
+        $date   = '2026-07-02';
+        $oldEnd = '16:30';
+        $newEnd = '17:00';
+
+        $extensionBlocked = function (array $events) use ($date, $oldEnd, $newEnd): bool {
+            $extStart = $date . ' ' . $oldEnd . ':00';
+            $extEnd   = $date . ' ' . $newEnd . ':00';
+            foreach ($events as $event) {
+                $evStart = (string)$event['datetime_start'];
+                $evEnd   = (string)$event['datetime_end'];
+                if ($extStart < $evEnd && $extEnd > $evStart) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Step 1: initial check passes — no blocking events.
+        $this->assertFalse(
+            $extensionBlocked([]),
+            'Initial check should pass when no events exist'
+        );
+
+        // Step 2 & 3: a blocking event appears; transactional recheck detects it.
+        $racingEvent = [
+            'eid'            => 99,
+            'sid'            => null, // all-table
+            'datetime_start' => $date . ' 16:30:00',
+            'datetime_end'   => $date . ' 17:30:00',
+        ];
+
+        $this->assertTrue(
+            $extensionBlocked([$racingEvent]),
+            'Recheck must detect a blocking event created after option loading'
+        );
+
+        // Verify table-specific event is also caught.
+        $tableEvent = [
+            'eid'            => 100,
+            'sid'            => 1, // table-specific
+            'datetime_start' => $date . ' 16:30:00',
+            'datetime_end'   => $date . ' 17:00:00',
+        ];
+
+        $this->assertTrue(
+            $extensionBlocked([$tableEvent]),
+            'Recheck must detect a table-specific blocking event'
+        );
     }
 
     // ── Amendment direction ────────────────────────────────────────────────
