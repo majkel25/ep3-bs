@@ -93,14 +93,12 @@ try {
     $bookingStart = ssaApiBuildDateTime($date, $timeStart);
     $bookingEnd   = ssaApiBuildDateTime($date, $oldEnd);
 
-    // ── Booking must be currently active ───────────────────────────────────
+    // ── Booking must not have ended ─────────────────────────────────────────
+    // Upcoming bookings are allowed: started-slot protection below enforces the
+    // minimum duration (start + one block) for both upcoming and active bookings.
 
     if ($now >= $bookingEnd) {
         ssaApiJsonResponse(409, ['error' => 'booking_ended', 'message' => 'This booking has already ended and cannot be amended.']);
-    }
-
-    if ($now < $bookingStart) {
-        ssaApiJsonResponse(409, ['error' => 'booking_not_started', 'message' => 'This booking has not started yet.']);
     }
 
     // ── No-op check ────────────────────────────────────────────────────────

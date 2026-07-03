@@ -92,14 +92,12 @@ try {
     $bookingStart = ssaApiBuildDateTime($date, $timeStart);
     $bookingEnd   = ssaApiBuildDateTime($date, $timeEnd);
 
-    // ── Booking must be active now ──────────────────────────────────────────
+    // ── Booking must not have ended ─────────────────────────────────────────
+    // Upcoming bookings are allowed: the earliest-end calculation already handles
+    // the case where now < bookingStart by returning start + one block.
 
     if ($now >= $bookingEnd) {
         ssaApiJsonResponse(409, ['error' => 'booking_ended', 'message' => 'This booking has already ended.']);
-    }
-
-    if ($now < $bookingStart) {
-        ssaApiJsonResponse(409, ['error' => 'booking_not_started', 'message' => 'This booking has not started yet. Use cancellation instead.']);
     }
 
     // ── Block size ─────────────────────────────────────────────────────────
