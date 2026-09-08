@@ -10,7 +10,7 @@ class SquareValidatorFactory implements FactoryInterface
 
     public function createService(ServiceLocatorInterface $sm)
     {
-        return new SquareValidator(
+        return new OnlineBookingValidator(
             $sm->get('Booking\Manager\BookingManager'),
             $sm->get('Booking\Manager\ReservationManager'),
             $sm->get('Event\Manager\EventManager'),
