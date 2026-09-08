@@ -17,6 +17,7 @@ class CreateFactory implements FactoryInterface
             $serviceManager->get('Booking\Manager\ReservationManager'),
             $serviceManager->get('Square\Manager\SquareManager'),
             $serviceManager->get('User\Manager\UserManager'),
+            $serviceManager->get('Booking\Service\BookingSlotLimitService'),
             $serviceManager->get('Zend\Db\Adapter\Adapter')->getDriver()->getConnection());
     }
 
