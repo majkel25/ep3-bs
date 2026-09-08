@@ -5,6 +5,7 @@ namespace Backend\Controller\Plugin\Booking;
 use Booking\Entity\Booking;
 use Booking\Manager\BookingManager;
 use Booking\Manager\ReservationManager;
+use Booking\Service\BookingSlotLimitService;
 use Square\Entity\Square;
 use Square\Manager\SquareManager;
 use User\Entity\User;
@@ -19,15 +20,18 @@ class Create extends AbstractPlugin
     protected $reservationManager;
     protected $squareManager;
     protected $userManager;
+    protected $bookingSlotLimitService;
     protected $connection;
 
     public function __construct(BookingManager $bookingManager, ReservationManager $reservationManager,
-        SquareManager $squareManager, UserManager $userManager, ConnectionInterface $connection)
+        SquareManager $squareManager, UserManager $userManager, BookingSlotLimitService $bookingSlotLimitService,
+        ConnectionInterface $connection)
     {
         $this->bookingManager = $bookingManager;
         $this->reservationManager = $reservationManager;
         $this->squareManager = $squareManager;
         $this->userManager = $userManager;
+        $this->bookingSlotLimitService = $bookingSlotLimitService;
         $this->connection = $connection;
     }
 
@@ -96,6 +100,17 @@ class Create extends AbstractPlugin
 
             $dateStart = new \DateTime($dateStart);
             $dateEnd = new \DateTime($dateEnd);
+
+            /* Enforce per-user active booking slot limit before anything is written. */
+
+            $this->bookingSlotLimitService->assertCanCreate(
+                $user->need('uid'),
+                $dateStart,
+                $dateEnd,
+                $timeStart,
+                $timeEnd,
+                $repeat
+            );
 
             /* Determine booking meta */
 
