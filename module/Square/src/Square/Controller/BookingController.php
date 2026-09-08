@@ -35,6 +35,10 @@ class BookingController extends AbstractActionController
         }
 
         if (! $byproducts['bookable']) {
+            if (! empty($byproducts['notBookableReason'])) {
+                throw new RuntimeException($byproducts['notBookableReason']);
+            }
+
             throw new RuntimeException(sprintf($this->t('This %s is already occupied'), $this->option('subject.square.type')));
         }
 
@@ -71,6 +75,10 @@ class BookingController extends AbstractActionController
         }
 
         if (! $byproducts['bookable']) {
+            if (! empty($byproducts['notBookableReason'])) {
+                throw new RuntimeException($byproducts['notBookableReason']);
+            }
+
             throw new RuntimeException(sprintf($this->t('This %s is already occupied'), $this->option('subject.square.type')));
         }
 
